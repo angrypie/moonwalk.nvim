@@ -1,18 +1,20 @@
--- TODO Figure out scope-scoring algorithm (currently just score / i)
--- TODO While editing score should be higher
--- TODO Figure out frecency algorithm
--- TODO What is best max_scope_depth for scoring scope?
--- TODO node:id() its'not guaranteed to be concerete type, (currently non_printable string)
--- TODO If scores increasing indefinitely, do we need to check for overflow?
+-- Figure out scope-scoring algorithm (currently just score / i)
+-- -
+-- While editing score should be higher
+-- Figure out frecency algorithm
+-- What is best max_scope_depth for scoring scope?
+-- node:id() its'not guaranteed to be concerete type, (currently non_printable string)
+-- If scores increasing indefinitely, do we need to check for overflow?
 local ts_utils = require("nvim-treesitter.ts_utils")
 local uv = vim.loop
 
 local M = {
 	---@type table<string, integer>
-	scores = {},
-	---@type table<string, TSNode>
-	nodes = {},
+	scores          = {},
+	---@type table<string, integer>
+	marks           = {},
 	max_scope_depth = 20,
+	namespace       = vim.api.nvim_create_namespace('my-plugin')
 }
 
 
@@ -29,25 +31,10 @@ timer:start(0, 1000, vim.schedule_wrap(function()
 	-- You must always close your uv handles or you'll leak memory
 	-- We can't depend on the GC since it doesn't know enough about libuv.
 	debug_max_timer = debug_max_timer + 1
-	if debug_max_timer == 100 then
+	if debug_max_timer == 1000 then
 		timer:close()
 	end
 end))
-
-
---sorts scores and moves cursor to the first node
-function M.walk_to_top()
-	local top = nil
-	local value = 0
-	for k, v in pairs(M.scores) do
-		if v > value then
-			top = k
-			value = v
-		end
-	end
-	local node = M.nodes[top]
-	ts_utils.goto_node(node, false, true)
-end
 
 function M.score_current_scope()
 	local current = M.get_current_scope()
@@ -81,7 +68,7 @@ function M.score_nodes(node, depth)
 		local new_score = M.score_node(n, score / i)
 		debug_str = debug_str .. n:type() .. string.format(" %.2f", new_score) .. " -> "
 	end
-	print(debug_str)
+	-- print(debug_str)
 end
 
 ---Increase score of the node and returns new score
@@ -97,7 +84,10 @@ function M.score_node(node, score)
 	else
 		M.scores[id] = old_score + score
 	end
-	M.nodes[id] = node
+
+	local node_start = node:range()[1]
+	local mark = vim.api.nivm_buf_set_extmark(0, M.namespace, nade_start[1], nade_start[2], {})
+
 	return old_score + score
 end
 
@@ -113,6 +103,26 @@ function M.get_current_scope()
 		return nil
 	end
 	return current
+end
+
+--sorts scores and moves cursor to the first node
+function M.walk_to_best_mark()
+	local top = nil
+	local value = 0
+	for k, v in pairs(M.scores) do
+		if v > value then
+			top = k
+			value = v
+		end
+	end
+	local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.namespace, M.marks[top], {})[1]
+	--check if mark empty list
+
+	if mark == nil then
+		print("No marks found")
+		return
+	end
+	vim.api.nvim_win_set_cursor(0, { mark[1], mark[2] + 1 })
 end
 
 return M
