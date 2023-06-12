@@ -87,3 +87,9 @@ extern Integer nvim_win_get_height(Window window, Error *err);
 
 extern ArrayOf(Integer, 2) nvim_win_get_cursor(Window window, Error *err);
 extern void nvim_win_set_cursor(Window window, ArrayOf(Integer, 2) pos, Error *err);
+
+
+// typedef void* lua_State;
+
+extern void **get_global_lstate(void);
+

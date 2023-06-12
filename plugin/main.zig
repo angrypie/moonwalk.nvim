@@ -25,6 +25,7 @@ pub export fn get_magenta() i64 {
     cursor.items[0].data.integer = 1;
     cursor.items[1].data.integer = 1;
     api.nvim_win_set_cursor(0, cursor, &err);
+    _ = api.get_global_lstate();
 
     return line;
 }
