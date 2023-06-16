@@ -11,9 +11,7 @@ local uv = vim.loop
 local M = {
 	---@type table<string, integer>
 	scores          = {},
-	---@type table<string, integer>
-	marks           = {},
-	max_scope_depth = 1,
+	max_scope_depth = 10,
 	ns              = vim.api.nvim_create_namespace('my-plugin')
 }
 
@@ -39,6 +37,13 @@ else
 	end))
 end
 
+vim.api.nvim_buf_attach(0, false, {
+	on_lines = function(_, buf, changedtick, firstline, lastline, new_lastline, byte_count)
+		-- print("on_lines", buf, changedtick, firstline, lastline, new_lastline, byte_count)
+		print("on_lines", buf, firstline)
+	end,
+})
+
 function M.score_current_scope()
 	local current = M.get_current_scope()
 	-- If working on "chunk" node, do nothing.
@@ -49,9 +54,34 @@ function M.score_current_scope()
 	M.score_nodes(current, M.max_scope_depth)
 end
 
+---Get best mark from list of marks, and remove all other marks.
+---@param marks any[]
+---@return integer
+function M.best_extmark_clear_rest(marks)
+	local best = nil
+	local best_score = 0
+	for _, mark in pairs(marks) do
+		local id = mark[1]
+		local score = M.scores[id] or 0
+		if score >= best_score then
+			best = id
+			best_score = score
+		end
+
+		if best ~= nil and best ~= id then -- remove previous best mark
+			print("removing", id)
+			vim.api.nvim_buf_del_extmark(0, M.ns, id)
+			table.remove(M.scores, id)
+		end
+	end
+	-- print("best", best)
+	return best
+end
+
 ---TODO score_node is the most important part now, we have to figure out how to properly score each node.
 ---Time of the visits should be taken into account. Possible look into exponential decay.
 ---Also score_node sets extmarks and updatets them, sohuld be a lot of bugs while editing text.
+---NOTE if multiple extmarks on the same line, best one would be chosen and others would be deleted.
 ---=====
 ---Increase score of the node, create extmark on the start of the node and returns new score.
 ---If mark already exists on same line, it will be updated.
@@ -62,12 +92,12 @@ function M.score_node(node, score)
 	local line = node:range() -- node start position
 
 	-- get mark for line where ts node starts, or create new one
-	local mark = vim.api.nvim_buf_get_extmarks(0, M.ns, { line, 0 }, { line, -1 }, {})[1]
-	local id = -1
-	if mark == nil then
-		id = vim.api.nvim_buf_set_extmark(0, M.ns, line, -1, {})
-	else -- if mark exists, get id
-		id = mark[1]
+	local marks = vim.api.nvim_buf_get_extmarks(0, M.ns, { line, 0 }, { line, -1 }, {})
+	local id = M.best_extmark_clear_rest(marks)
+	if id == nil then       -- if mark doesn't exist, create new one
+		id = vim.api.nvim_buf_set_extmark(0, M.ns, line, -1, {
+			right_gravity = false, -- left gravity, stick to start of the node (on new line, and insert)
+		})
 	end
 
 	-- update score of the mark
@@ -131,6 +161,7 @@ function M.walk_to_best_mark()
 		return
 	end
 	-- convert top to integer id
+	-- TODO when extmark deleted it would point to wrong position and cause error for set_cursor
 	local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, top, {})
 
 	if mark == nil then
