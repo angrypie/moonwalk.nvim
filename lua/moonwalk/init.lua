@@ -8,11 +8,26 @@
 local ts_utils = require("nvim-treesitter.ts_utils")
 local uv = vim.loop
 
+local function get_keys_sorted_by_value(tbl, sortFunction)
+	local keys = {}
+	for key in pairs(tbl) do
+		table.insert(keys, key)
+	end
+
+	table.sort(keys, function(a, b)
+		return sortFunction(tbl[a], tbl[b])
+	end)
+
+	return keys
+end
+
+
 local M = {
 	---@type table<string, integer>
 	scores          = {},
 	max_scope_depth = 10,
-	ns              = vim.api.nvim_create_namespace('my-plugin')
+	ns              = vim.api.nvim_create_namespace('my-plugin'),
+	last_walk       = 0,
 }
 
 
@@ -148,18 +163,26 @@ end
 
 --sorts scores and moves cursor to the first node
 function M.walk_to_best_mark()
-	local top = 0
-	local value = 0
-	for k, v in ipairs(M.scores) do
-		if v > value then
-			top = k
-			value = v
-		end
-	end
-	if top == 0 then
+	local keys = get_keys_sorted_by_value(M.scores, function(a, b)
+		return a > b
+	end)
+
+	if keys[1] == nil then
 		vim.notify("moonwalk: no history available", vim.log.levels.ERROR)
 		return
 	end
+
+
+	-- Track jump history and dont jump to same position twice during 'jump session'
+	local top = keys[1]
+	local since_last = os.time() - M.last_walk
+	if since_last < 3 then
+		top = keys[2]
+	end
+	local value = M.scores[top]
+
+
+
 	-- convert top to integer id
 	-- TODO when extmark deleted it would point to wrong position and cause error for set_cursor
 	local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, top, {})
@@ -168,8 +191,9 @@ function M.walk_to_best_mark()
 		print("No marks found")
 		return
 	end
-	print("mark", mark[1], mark[2], value, top)
+	print("mark", mark[1], mark[2], value, top, "since_last", since_last)
 	vim.api.nvim_win_set_cursor(0, { mark[1] + 1, mark[2] })
+	M.last_walk = os.time()
 end
 
 return M
