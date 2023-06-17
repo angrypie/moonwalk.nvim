@@ -8,26 +8,41 @@
 local ts_utils = require("nvim-treesitter.ts_utils")
 local uv = vim.loop
 
-local function get_keys_sorted_by_value(tbl, sortFunction)
+---@param tbl table<integer,number>
+---@param sortFunction fun(a: any, b: any):boolean
+---@param limit integer
+---@return integer[]
+local function get_keys_sorted_by_value(tbl, sortFunction, limit)
 	local keys = {}
+	local total = 0
 	for key in pairs(tbl) do
 		table.insert(keys, key)
+		total = total + 1
 	end
 
 	table.sort(keys, function(a, b)
 		return sortFunction(tbl[a], tbl[b])
 	end)
 
-	return keys
+	if limit > total then
+		limit = total
+	end
+
+	return { unpack(keys, 1, total) }
 end
 
 
+
 local M = {
-	---@type table<string, integer>
+	---@type table<integer, number>
 	scores          = {},
 	max_scope_depth = 10,
 	ns              = vim.api.nvim_create_namespace('my-plugin'),
-	last_walk       = 0,
+	last_walk_time  = 0,
+	---@type integer[]
+	walking_session = {}, --
+	max_walk_places = 5, -- how many places to walk back in one session
+	current_node    = 0,
 }
 
 
@@ -51,13 +66,6 @@ else
 		end
 	end))
 end
-
-vim.api.nvim_buf_attach(0, false, {
-	on_lines = function(_, buf, changedtick, firstline, lastline, new_lastline, byte_count)
-		-- print("on_lines", buf, changedtick, firstline, lastline, new_lastline, byte_count)
-		print("on_lines", buf, firstline)
-	end,
-})
 
 function M.score_current_scope()
 	local current = M.get_current_scope()
@@ -163,37 +171,39 @@ end
 
 --sorts scores and moves cursor to the first node
 function M.walk_to_best_mark()
-	local keys = get_keys_sorted_by_value(M.scores, function(a, b)
-		return a > b
-	end)
+	-- get new walking session
+	if os.time() - M.last_walk_time > 3 then
+		M.walking_session = get_keys_sorted_by_value(M.scores, function(a, b)
+			return a > b
+		end, M.max_walk_places)
+		M.last_walk_index = 0
+	end
 
+	local keys = M.walking_session
 	if keys[1] == nil then
 		vim.notify("moonwalk: no history available", vim.log.levels.ERROR)
 		return
 	end
 
-
 	-- Track jump history and dont jump to same position twice during 'jump session'
-	local top = keys[1]
-	local since_last = os.time() - M.last_walk
-	if since_last < 3 then
-		top = keys[2]
+	M.last_walk_index = M.last_walk_index + 1
+	if M.last_walk_index > #keys then
+		M.last_walk_index = 1
 	end
-	local value = M.scores[top]
-
-
+	local nextId = keys[M.last_walk_index]
+	local score = M.scores[nextId]
 
 	-- convert top to integer id
 	-- TODO when extmark deleted it would point to wrong position and cause error for set_cursor
-	local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, top, {})
-
+	local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, nextId, {})
 	if mark == nil then
 		print("No marks found")
 		return
 	end
-	print("mark", mark[1], mark[2], value, top, "since_last", since_last)
+
+	-- print("mark", score, nextId, "since_last")
 	vim.api.nvim_win_set_cursor(0, { mark[1] + 1, mark[2] })
-	M.last_walk = os.time()
+	M.last_walk_time = os.time()
 end
 
 return M
