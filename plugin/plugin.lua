@@ -1,6 +1,7 @@
 local m = require('moonwalk')
 
-vim.keymap.set('n', '<C-s>', m.walk_to_best_mark, { noremap = true, silent = true })
+vim.keymap.set('n', '<C-s>', m.walk_to_best_place, { noremap = true, silent = true })
+vim.keymap.set('n', '<C-m>', m.highlight_best_places_toggle, { noremap = true, silent = true })
 
 
 -- local ffi = require 'ffi'

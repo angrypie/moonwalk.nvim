@@ -28,7 +28,7 @@ local function get_keys_sorted_by_value(tbl, sortFunction, limit)
 		limit = total
 	end
 
-	return { unpack(keys, 1, total) }
+	return { unpack(keys, 1, limit) }
 end
 
 
@@ -37,7 +37,9 @@ local M = {
 	---@type table<integer, number>
 	scores          = {},
 	max_scope_depth = 10,
-	ns              = vim.api.nvim_create_namespace('my-plugin'),
+	ns_hl           = vim.api.nvim_create_namespace('moonwalk.hl'),
+	hl_enabled      = false,
+	ns              = vim.api.nvim_create_namespace('moonwalk.mark'),
 	last_walk_time  = 0,
 	---@type integer[]
 	walking_session = {}, --
@@ -169,17 +171,22 @@ function M.get_current_scope()
 	return current
 end
 
+-- TODO implement recency scoring here, make it reusable (jump per file, per project)
+function M.get_best_places()
+	return get_keys_sorted_by_value(M.scores, function(a, b)
+		return a > b
+	end, M.max_walk_places)
+end
+
 --sorts scores and moves cursor to the first node
-function M.walk_to_best_mark()
+function M.walk_to_best_place()
 	-- get new walking session
 	if os.time() - M.last_walk_time > 3 then
-		M.walking_session = get_keys_sorted_by_value(M.scores, function(a, b)
-			return a > b
-		end, M.max_walk_places)
+		M.walking_session = M.get_best_places()
 		M.last_walk_index = 0
 	end
 
-	local keys = M.walking_session
+	local keys = M.walking_session or {}
 	if keys[1] == nil then
 		vim.notify("moonwalk: no history available", vim.log.levels.ERROR)
 		return
@@ -191,7 +198,6 @@ function M.walk_to_best_mark()
 		M.last_walk_index = 1
 	end
 	local nextId = keys[M.last_walk_index]
-	local score = M.scores[nextId]
 
 	-- convert top to integer id
 	-- TODO when extmark deleted it would point to wrong position and cause error for set_cursor
@@ -201,9 +207,27 @@ function M.walk_to_best_mark()
 		return
 	end
 
-	-- print("mark", score, nextId, "since_last")
+	-- print("mark", M.scores[nextId], nextId, "since_last")
 	vim.api.nvim_win_set_cursor(0, { mark[1] + 1, mark[2] })
 	M.last_walk_time = os.time()
+end
+
+function M.highlight_best_places_toggle()
+	if M.hl_enabled then
+		vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
+		M.hl_enabled = false
+		return
+	end
+	M.hl_enabled = true
+	local keys = M.get_best_places() or {}
+	for _, id in ipairs(keys) do
+		local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
+		if mark == nil then
+			print("mark not found")
+			return
+		end
+		vim.api.nvim_buf_add_highlight(0, M.ns_hl, "Visual", mark[1], 0, -1)
+	end
 end
 
 return M
