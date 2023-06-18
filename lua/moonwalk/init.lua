@@ -7,6 +7,7 @@
 -- If scores increasing indefinitely, do we need to check for overflow?
 local ts_utils = require("nvim-treesitter.ts_utils")
 local uv = vim.loop
+local scope = require("moonwalk.tree")
 
 ---@param tbl table<integer,number>
 ---@param sortFunction fun(a: any, b: any):boolean
@@ -36,7 +37,7 @@ end
 local M = {
 	---@type table<integer, number>
 	scores          = {},
-	max_scope_depth = 10,
+	max_scope_depth = 1,
 	ns_hl           = vim.api.nvim_create_namespace('moonwalk.hl'),
 	hl_enabled      = false,
 	ns              = vim.api.nvim_create_namespace('moonwalk.mark'),
@@ -77,6 +78,7 @@ function M.score_current_scope()
 	end
 
 	M.score_nodes(current, M.max_scope_depth)
+	scope.score_nodes(current, M.max_scope_depth)
 end
 
 ---Get best mark from list of marks, and remove all other marks.
