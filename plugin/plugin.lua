@@ -5,16 +5,16 @@ vim.keymap.set('n', '<C-m>', m.highlight_best_places_toggle, { noremap = true, s
 
 
 -- local ffi = require 'ffi'
-
+--
 -- ffi.cdef [[
 -- 	int get_magenta()
 -- ]]
-
+-- --
 -- local lib = ffi.load('./libmain.dylib')
-
+-- --
 -- vim.keymap.set('n', '<C-s>', function()
 -- 	local result = lib.get_magenta()
 -- 	print(result)
 -- end, {})
-
+-- --
 -- print(lib.get_magenta())

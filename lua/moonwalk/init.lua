@@ -3,11 +3,11 @@
 -- While editing score should be higher
 -- Figure out frecency algorithm
 -- What is best max_scope_depth for scoring scope?
--- node:id() its'not guaranteed to be concerete type, (currently non_printable string)
+-- node:id() its'not guaranteed to be concrete type, (currently non_printable string)
 -- If scores increasing indefinitely, do we need to check for overflow?
 local ts_utils = require("nvim-treesitter.ts_utils")
 local uv = vim.loop
-local scope = require("moonwalk.tree")
+-- local scope = require("moonwalk.tree") uncomment other: TODO tree-sitter version
 
 ---@param tbl table<integer,number>
 ---@param sortFunction fun(a: any, b: any):boolean
@@ -37,13 +37,13 @@ end
 local M = {
 	---@type table<integer, number>
 	scores          = {},
-	max_scope_depth = 1,
+	max_scope_depth = 2,
 	ns_hl           = vim.api.nvim_create_namespace('moonwalk.hl'),
 	hl_enabled      = false,
 	ns              = vim.api.nvim_create_namespace('moonwalk.mark'),
 	last_walk_time  = 0,
 	---@type integer[]
-	walking_session = {}, --
+	walking_session = {}, -- cache walking session to not recalculate while user rapidly invokes walking method
 	max_walk_places = 5, -- how many places to walk back in one session
 	current_node    = 0,
 }
@@ -52,6 +52,7 @@ local M = {
 -- Create a handle to a uv_timer_t
 local timer = uv.new_timer()
 local debug_max_timer = 0
+local IS_DEBUG = true
 
 -- This will wait 1000ms and then continue inside the callback
 if timer == nil then
@@ -67,7 +68,34 @@ else
 		if debug_max_timer == 1000 then
 			timer:close()
 		end
+		if IS_DEBUG then
+			M.debug_show_scores()
+		end
 	end))
+end
+
+function M.debug_show_scores()
+	-- Clear any existing virtual text first
+	vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
+
+	-- Iterate through all scores and show them
+	for id, score in pairs(M.scores) do
+		local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
+
+		-- Return: ~
+		--     0-indexed (row, col) tuple or empty list () if extmark id was absent
+		-- compare if mark is empty
+		if mark == nil then
+			-- Format score with 2 decimal places
+			local score_text = string.format("%.2f", score)
+			-- Add virtual text with score
+			vim.api.nvim_buf_set_extmark(0, M.ns_hl, mark[1], 0, {
+				id = id,
+				virt_text = { { score_text, "Comment" } },
+				virt_text_pos = "eol",
+			})
+		end
+	end
 end
 
 function M.score_current_scope()
@@ -78,7 +106,7 @@ function M.score_current_scope()
 	end
 
 	M.score_nodes(current, M.max_scope_depth)
-	scope.score_nodes(current, M.max_scope_depth)
+	-- scope.score_nodes(current, M.max_scope_depth) uncomment other: TODO tree-sitter version
 end
 
 ---Get best mark from list of marks, and remove all other marks.
@@ -153,7 +181,7 @@ function M.score_nodes(node, depth)
 
 	local score = 1
 	for i, n in ipairs(nodes) do
-		local new_score = M.score_node(n, score / i)
+		local new_score = M.score_node(n, score / i) -- figure out better scoring algorithm
 		debug_str = debug_str .. n:type() .. string.format(" %.2f", new_score) .. " -> "
 	end
 	-- print(debug_str)
@@ -183,6 +211,7 @@ end
 --sorts scores and moves cursor to the first node
 function M.walk_to_best_place()
 	-- get new walking session
+	-- TODO for now 'walking session' cashed  if less than 3 seconds passed betweeen calls
 	if os.time() - M.last_walk_time > 3 then
 		M.walking_session = M.get_best_places()
 		M.last_walk_index = 0
