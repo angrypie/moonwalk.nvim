@@ -32,11 +32,23 @@ local function get_keys_sorted_by_value(tbl, sortFunction, limit)
 	return { unpack(keys, 1, limit) }
 end
 
+local function get_buffer_id_by_filename(filename)
+	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
+		local buf_name = vim.api.nvim_buf_get_name(buf)
+		if buf_name:match(filename) then
+			return buf
+		end
+	end
+	return nil
+end
+
 
 
 local M = {
 	---@type table<integer, number>
 	scores          = {},
+	---@type table<integer, string>
+	extmark_to_file = {}, -- extmark id -> file name
 	max_scope_depth = 2,
 	ns_hl           = vim.api.nvim_create_namespace('moonwalk.hl'),
 	hl_enabled      = false,
@@ -79,21 +91,25 @@ function M.debug_show_scores()
 	vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
 
 	-- Iterate through all scores and show them
+	local current_file = vim.api.nvim_buf_get_name(0)
 	for id, score in pairs(M.scores) do
-		local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
+		local file = M.extmark_to_file[id]
+		if file == current_file then
+			local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
 
-		-- Return: ~
-		--     0-indexed (row, col) tuple or empty list () if extmark id was absent
-		-- compare if mark is empty
-		if mark == nil then
-			-- Format score with 2 decimal places
-			local score_text = string.format("%.2f", score)
-			-- Add virtual text with score
-			vim.api.nvim_buf_set_extmark(0, M.ns_hl, mark[1], 0, {
-				id = id,
-				virt_text = { { score_text, "Comment" } },
-				virt_text_pos = "eol",
-			})
+			-- Return: ~
+			--     0-indexed (row, col) tuple or empty list () if extmark id was absent
+			-- compare if mark is empty
+			if mark ~= nil then
+				-- Format score with 2 decimal places
+				local score_text = string.format("%.2f", score)
+				-- Add virtual text with score
+				vim.api.nvim_buf_set_extmark(0, M.ns_hl, mark[1], 0, {
+					id = id,
+					virt_text = { { score_text, "Comment" } },
+					virt_text_pos = "eol",
+				})
+			end
 		end
 	end
 end
@@ -111,7 +127,7 @@ end
 
 ---Get best mark from list of marks, and remove all other marks.
 ---@param marks any[]
----@return integer
+---@return integer | nil
 function M.best_extmark_clear_rest(marks)
 	local best = nil
 	local best_score = 0
@@ -127,6 +143,7 @@ function M.best_extmark_clear_rest(marks)
 			print("removing", id)
 			vim.api.nvim_buf_del_extmark(0, M.ns, id)
 			table.remove(M.scores, id)
+			table.remove(M.extmark_to_file, id)
 		end
 	end
 	-- print("best", best)
@@ -149,10 +166,14 @@ function M.score_node(node, score)
 	-- get mark for line where ts node starts, or create new one
 	local marks = vim.api.nvim_buf_get_extmarks(0, M.ns, { line, 0 }, { line, -1 }, {})
 	local id = M.best_extmark_clear_rest(marks)
-	if id == nil then       -- if mark doesn't exist, create new one
+	if id == nil then -- if mark doesn't exist, create new one
+		local next_id = #M.scores + 1
 		id = vim.api.nvim_buf_set_extmark(0, M.ns, line, -1, {
 			right_gravity = false, -- left gravity, stick to start of the node (on new line, and insert)
+			id = next_id,
 		})
+		local file = vim.api.nvim_buf_get_name(0)
+		M.extmark_to_file[id] = file
 	end
 
 	-- update score of the mark
@@ -180,6 +201,8 @@ function M.score_nodes(node, depth)
 	local debug_str = ""
 
 	local score = 1
+	-- TODO right now we are double scoring nodes, that are on the same line
+	-- because of score consolidation into one extmark,
 	for i, n in ipairs(nodes) do
 		local new_score = M.score_node(n, score / i) -- figure out better scoring algorithm
 		debug_str = debug_str .. n:type() .. string.format(" %.2f", new_score) .. " -> "
@@ -230,6 +253,13 @@ function M.walk_to_best_place()
 	end
 	local nextId = keys[M.last_walk_index]
 
+
+	local target_file = M.extmark_to_file[nextId]
+	local current_file = vim.api.nvim_buf_get_name(0)
+	if target_file ~= current_file then
+		vim.cmd("e " .. target_file)
+	end
+
 	-- convert top to integer id
 	-- TODO when extmark deleted it would point to wrong position and cause error for set_cursor
 	local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, nextId, {})
@@ -238,7 +268,6 @@ function M.walk_to_best_place()
 		return
 	end
 
-	-- print("mark", M.scores[nextId], nextId, "since_last")
 	vim.api.nvim_win_set_cursor(0, { mark[1] + 1, mark[2] })
 	M.last_walk_time = os.time()
 end
