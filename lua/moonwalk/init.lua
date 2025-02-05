@@ -6,58 +6,67 @@
 -- node:id() its'not guaranteed to be concrete type, (currently non_printable string)
 -- If scores increasing indefinitely, do we need to check for overflow?
 local ts_utils = require("nvim-treesitter.ts_utils")
-local uv = vim.loop
+local uv = vim.uv
 -- local scope = require("moonwalk.tree") uncomment other: TODO tree-sitter version
 
----@param tbl table<integer,number>
----@param sortFunction fun(a: any, b: any):boolean
----@param limit integer
+---Return top k keys of the table. It is fast for small k number.
+---@param data table<integer,number>
+---@param length integer
+---@param k integer
 ---@return integer[]
-local function get_keys_sorted_by_value(tbl, sortFunction, limit)
-	local keys = {}
-	local total = 0
-	for key in pairs(tbl) do
-		table.insert(keys, key)
-		total = total + 1
+local function topKTable(data, length, k)
+	if length < k then
+		k = length
+	end
+	local topKValues = {}
+	local topKKeys = {}
+
+	-- Initialize arrays with default values
+	for i = 1, k do
+		topKValues[i] = -math.huge
+		topKKeys[i] = -1
 	end
 
-	table.sort(keys, function(a, b)
-		return sortFunction(tbl[a], tbl[b])
-	end)
-
-	if limit > total then
-		limit = total
-	end
-
-	return { unpack(keys, 1, limit) }
-end
-
-local function get_buffer_id_by_filename(filename)
-	for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-		local buf_name = vim.api.nvim_buf_get_name(buf)
-		if buf_name:match(filename) then
-			return buf
+	-- Iterate through table using pairs instead of ipairs
+	for key, value in pairs(data) do
+		-- Only process if value is greater than smallest in current top K
+		if value > topKValues[k] then
+			local j = k
+			-- Find correct position to insert while shifting smaller values
+			while j > 1 and value > topKValues[j - 1] do
+				topKValues[j] = topKValues[j - 1]
+				topKKeys[j] = topKKeys[j - 1]
+				j = j - 1
+			end
+			-- Insert new value and key
+			topKValues[j] = value
+			topKKeys[j] = key
 		end
 	end
-	return nil
+
+	print("keys", table.concat(topKKeys, ", "))
+
+	return topKKeys
 end
 
 
 
 local M = {
+	---@type integer
+	extmarks_counter = 0,
 	---@type table<integer, number>
-	scores          = {},
+	scores           = {},
 	---@type table<integer, string>
-	extmark_to_file = {}, -- extmark id -> file name
-	max_scope_depth = 2,
-	ns_hl           = vim.api.nvim_create_namespace('moonwalk.hl'),
-	hl_enabled      = false,
-	ns              = vim.api.nvim_create_namespace('moonwalk.mark'),
-	last_walk_time  = 0,
+	extmark_to_file  = {}, -- extmark id -> file name
+	max_scope_depth  = 5,
+	ns_hl            = vim.api.nvim_create_namespace('moonwalk.hl'),
+	hl_enabled       = false,
+	ns               = vim.api.nvim_create_namespace('moonwalk.mark'),
+	last_walk_time   = 0, -- TODO replace with tracking keypresses
 	---@type integer[]
-	walking_session = {}, -- cache walking session to not recalculate while user rapidly invokes walking method
-	max_walk_places = 5, -- how many places to walk back in one session
-	current_node    = 0,
+	walking_session  = {}, -- cache walking session to not recalculate while user rapidly invokes walking method
+	max_walk_places  = 5, -- how many places to walk back in one session
+	current_node     = 0,
 }
 
 
@@ -84,6 +93,32 @@ else
 			M.debug_show_scores()
 		end
 	end))
+end
+
+function M.update_extmark_score(id, line, score)
+	if id == nil then                      -- if mark doesn't exist, create new one
+		local next_id = M.extmarks_counter + 1 -- TODO: what the best way to generate id?
+		id = vim.api.nvim_buf_set_extmark(0, M.ns, line, -1, {
+			right_gravity = false,             -- left gravity, stick to start of the node (on new line, and insert)
+			id = next_id,
+		})
+		local file = vim.api.nvim_buf_get_name(0)
+		M.extmark_to_file[id] = file -- safve
+		print("new extmark", id, file, M.extmarks_counter + 1)
+		M.extmarks_counter = M.extmarks_counter + 1
+	end
+
+	-- update or add new score
+	local new_score = (M.scores[id] or 0) + score
+	M.scores[id] = new_score
+	return score
+end
+
+function M.remove_extmark_score(id)
+	print("remove", id)
+	table.remove(M.scores, id)
+	table.remove(M.extmark_to_file, id)
+	M.extmarks_counter = M.extmarks_counter - 1
 end
 
 function M.debug_show_scores()
@@ -142,8 +177,7 @@ function M.best_extmark_clear_rest(marks)
 		if best ~= nil and best ~= id then -- remove previous best mark
 			print("removing", id)
 			vim.api.nvim_buf_del_extmark(0, M.ns, id)
-			table.remove(M.scores, id)
-			table.remove(M.extmark_to_file, id)
+			M.remove_extmark_score(id)
 		end
 	end
 	-- print("best", best)
@@ -166,21 +200,7 @@ function M.score_node(node, score)
 	-- get mark for line where ts node starts, or create new one
 	local marks = vim.api.nvim_buf_get_extmarks(0, M.ns, { line, 0 }, { line, -1 }, {})
 	local id = M.best_extmark_clear_rest(marks)
-	if id == nil then -- if mark doesn't exist, create new one
-		local next_id = #M.scores + 1
-		id = vim.api.nvim_buf_set_extmark(0, M.ns, line, -1, {
-			right_gravity = false, -- left gravity, stick to start of the node (on new line, and insert)
-			id = next_id,
-		})
-		local file = vim.api.nvim_buf_get_name(0)
-		M.extmark_to_file[id] = file
-	end
-
-	-- update score of the mark
-	local old_score = M.scores[id] or 0
-	M.scores[id] = old_score + score
-
-	return M.scores[id]
+	return M.update_extmark_score(id, line, score)
 end
 
 ---Score all nodes towards root by specified depth. Chunk node is ignored.
@@ -225,10 +245,11 @@ function M.get_current_scope()
 end
 
 -- TODO implement recency scoring here, make it reusable (jump per file, per project)
+-- Returns top k extmarks ids
+-- @return integer[]
 function M.get_best_places()
-	return get_keys_sorted_by_value(M.scores, function(a, b)
-		return a > b
-	end, M.max_walk_places)
+	print("extmarks_counter", M.extmarks_counter)
+	return topKTable(M.scores, M.extmarks_counter, M.max_walk_places)
 end
 
 --sorts scores and moves cursor to the first node
@@ -286,7 +307,7 @@ function M.highlight_best_places_toggle()
 			print("mark not found")
 			return
 		end
-		vim.api.nvim_buf_add_highlight(0, M.ns_hl, "Visual", mark[1], 0, -1)
+		vim.hl.range(0, M.ns_hl, "Visual", { mark[1], 0 }, { mark[1], -1 })
 	end
 end
 
