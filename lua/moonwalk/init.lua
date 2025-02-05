@@ -67,13 +67,13 @@ local M = {
 	walking_session  = {}, -- cache walking session to not recalculate while user rapidly invokes walking method
 	max_walk_places  = 5, -- how many places to walk back in one session
 	current_node     = 0,
+	IS_DEBUG         = true
 }
 
 
 -- Create a handle to a uv_timer_t
 local timer = uv.new_timer()
 local debug_max_timer = 0
-local IS_DEBUG = true
 
 -- This will wait 1000ms and then continue inside the callback
 if timer == nil then
@@ -89,7 +89,7 @@ else
 		if debug_max_timer == 1000 then
 			timer:close()
 		end
-		if IS_DEBUG then
+		if M.IS_DEBUG then
 			M.debug_show_scores()
 		end
 	end))
@@ -124,7 +124,6 @@ end
 function M.debug_show_scores()
 	-- Clear any existing virtual text first
 	vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
-
 	-- Iterate through all scores and show them
 	local current_file = vim.api.nvim_buf_get_name(0)
 	for id, score in pairs(M.scores) do
@@ -294,6 +293,11 @@ function M.walk_to_best_place()
 end
 
 function M.highlight_best_places_toggle()
+	if M.IS_DEBUG then
+		-- clear scores highlight_best_places_toggle
+		vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
+	end
+	M.IS_DEBUG = not M.IS_DEBUG
 	if M.hl_enabled then
 		vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
 		M.hl_enabled = false
