@@ -61,14 +61,14 @@ local M = {
 	extmark_to_file  = {}, -- extmark id -> file name
 	max_scope_depth  = 5,
 	ns_hl            = vim.api.nvim_create_namespace('moonwalk.hl'),
-	hl_enabled       = false,
 	ns               = vim.api.nvim_create_namespace('moonwalk.mark'),
 	last_walk_time   = 0, -- TODO replace with tracking keypresses
 	---@type integer[]
 	walking_session  = {}, -- cache walking session to not recalculate while user rapidly invokes walking method
 	max_walk_places  = 5, -- how many places to walk back in one session
 	current_node     = 0,
-	IS_DEBUG         = true
+	IS_DEBUG         = false,
+	hl_enabled       = false,
 }
 
 
@@ -97,11 +97,11 @@ else
 end
 
 function M.update_extmark_score(id, line, score)
-	if id == nil then                      -- if mark doesn't exist, create new one
-		local next_id = M.extmarks_counter + 1 -- TODO: what the best way to generate id?
+	if id == nil then -- if mark doesn't exist, create new one
+		-- local next_id = M.extmarks_counter + 1 -- TODO: what the best way to generate id?
 		id = vim.api.nvim_buf_set_extmark(0, M.ns, line, -1, {
-			right_gravity = false,             -- left gravity, stick to start of the node (on new line, and insert)
-			id = next_id,
+			right_gravity = false, -- left gravity, stick to start of the node (on new line, and insert)
+			-- id = next_id,
 		})
 		local file = vim.api.nvim_buf_get_name(0)
 		M.extmark_to_file[id] = file -- safve
@@ -120,33 +120,7 @@ function M.remove_extmark_score(id)
 	table.remove(M.scores, id)
 	table.remove(M.extmark_to_file, id)
 	M.extmarks_counter = M.extmarks_counter - 1
-end
-
-function M.debug_show_scores()
-	-- Clear any existing virtual text first
-	vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
-	-- Iterate through all scores and show them
-	local current_file = vim.api.nvim_buf_get_name(0)
-	for id, score in pairs(M.scores) do
-		local file = M.extmark_to_file[id]
-		if file == current_file then
-			local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
-
-			-- Return: ~
-			--     0-indexed (row, col) tuple or empty list () if extmark id was absent
-			-- compare if mark is empty
-			if mark ~= nil then
-				-- Format score with 2 decimal places
-				local score_text = string.format("%.2f", score)
-				-- Add virtual text with score
-				vim.api.nvim_buf_set_extmark(0, M.ns_hl, mark[1], 0, {
-					id = id,
-					virt_text = { { score_text, "Comment" } },
-					virt_text_pos = "eol",
-				})
-			end
-		end
-	end
+	vim.api.nvim_buf_del_extmark(0, M.ns, id)
 end
 
 function M.score_current_scope()
@@ -175,8 +149,6 @@ function M.best_extmark_clear_rest(marks)
 		end
 
 		if best ~= nil and best ~= id then -- remove previous best mark
-			print("removing", id)
-			vim.api.nvim_buf_del_extmark(0, M.ns, id)
 			M.remove_extmark_score(id)
 		end
 	end
@@ -244,10 +216,20 @@ function M.get_current_scope()
 	return current
 end
 
+---@class WalkOpts
+---@field ignore_file string? File to ignore when walking
+---@type WalkOpts
+local default_walk_opts = {
+	ignore_file = nil,
+}
+
 -- TODO implement recency scoring here, make it reusable (jump per file, per project)
 -- Returns top k extmarks ids
 -- @return integer[]
 function M.get_best_places(opts)
+	if opts == nil then
+		opts = default_walk_opts
+	end
 	local ignore_file = opts.ignore_file
 	print("extmarks_counter", M.extmarks_counter)
 
@@ -273,12 +255,8 @@ function M.walk_to_another_file()
 	M.walk_to_best_place(opts)
 end
 
-local default_walk_opts = {
-	ignore_file = nil,
-}
-
 --sorts scores and moves cursor to the first node
----@param opts table
+---@param opts WalkOpts
 function M.walk_to_best_place(opts)
 	if opts == nil then
 		opts = default_walk_opts
@@ -331,20 +309,26 @@ function M.debug_view_toggle()
 	end
 	M.hl_enabled = true
 	M.IS_DEBUG = true
-	local keys = M.get_best_places() or {}
-	local current_file = vim.api.nvim_buf_get_name(0)
-	for _, id in ipairs(keys) do
-		local file = M.extmark_to_file[id]
-		if file == current_file then
-			local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
-			if mark == nil then
-				print("mark not found")
-				return
-			end
-			--print mark table
-			vim.print(mark)
-			vim.hl.range(0, M.ns_hl, "Visual", { mark[1], 0 }, { mark[1], -1 })
-		end
+end
+
+function M.debug_show_scores()
+	-- Clear any existing virtual text first
+	vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
+	-- get extmarks for current file
+	local all = vim.api.nvim_buf_get_extmarks(0, M.ns, 0, -1, {})
+	for _, mark in pairs(all) do
+		-- local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
+		local id = mark[1]
+		local row = mark[2]
+		local score = M.scores[id]
+		-- Format score with 2 decimal places
+		local score_text = string.format("%.2f", score)
+		-- Add virtual text with score
+		vim.api.nvim_buf_set_extmark(0, M.ns_hl, row, 0, {
+			id = id,
+			virt_text = { { score_text, "Comment" } },
+			virt_text_pos = "eol",
+		})
 	end
 end
 
