@@ -5,70 +5,36 @@
 -- What is best max_scope_depth for scoring scope?
 -- node:id() its'not guaranteed to be concrete type, (currently non_printable string)
 -- If scores increasing indefinitely, do we need to check for overflow?
-local ts_utils = require("nvim-treesitter.ts_utils")
 local uv = vim.uv
 -- local scope = require("moonwalk.tree") uncomment other: TODO tree-sitter version
+local utils = require("moonwalk.utils")
 
----Return top k keys of the table. It is fast for small k number.
----@param data table<integer,number>
----@param length integer
----@param k integer
----@return integer[]
-local function topKTable(data, length, k)
-	if length < k then
-		k = length
-	end
-	print("topKTable", length, k)
-	local topKValues = {}
-	local topKKeys = {}
-
-	-- Initialize arrays with default values
-	for i = 1, k do
-		topKValues[i] = -math.huge
-		topKKeys[i] = -1
-	end
-
-	-- Iterate through table using pairs instead of ipairs
-	for key, value in pairs(data) do
-		-- Only process if value is greater than smallest in current top K
-		if value > topKValues[k] then
-			local j = k
-			-- Find correct position to insert while shifting smaller values
-			while j > 1 and value > topKValues[j - 1] do
-				topKValues[j] = topKValues[j - 1]
-				topKKeys[j] = topKKeys[j - 1]
-				j = j - 1
-			end
-			-- Insert new value and key
-			topKValues[j] = value
-			topKKeys[j] = key
-		end
-	end
-
-	print("keys", table.concat(topKKeys, ", "))
-
-	return topKKeys
+-- use vim.fn.has to check for nvim version to be 0.11 or higher, if not exit
+if vim.fn.has("nvim-0.11") == 0 then
+	vim.notify("Moonwalk requires Neovim 0.11+", vim.log.levels.ERROR)
+	return
 end
-
 
 
 local M = {
 	---@type integer
-	extmarks_counter = 0,
+	extmarks_counter     = 0, -- total nuber of extmarks
+	---@type integer
+	extmark_id_increment = 0, -- incremental id for extmarks to avoid collisions
 	---@type table<integer, number>
-	scores           = {},
+	scores               = {},
 	---@type table<integer, string>
-	extmark_to_file  = {}, -- extmark id -> file name
-	max_scope_depth  = 5,
-	ns_hl            = vim.api.nvim_create_namespace('moonwalk.hl'),
-	ns               = vim.api.nvim_create_namespace('moonwalk.mark'),
-	last_walk_time   = 0, -- TODO replace with tracking keypresses
+	extmark_to_file      = {}, -- extmark id -> file name
+	max_scope_depth      = 5,
+	ns_hl                = vim.api.nvim_create_namespace('moonwalk.hl'),
+	ns                   = vim.api.nvim_create_namespace('moonwalk.mark'),
+	last_walk_time       = 0, -- TODO replace with tracking keypresses
 	---@type integer[]
-	walking_session  = {}, -- cache walking session to not recalculate while user rapidly invokes walking method
-	max_walk_places  = 5, -- how many places to walk back in one session
-	current_node     = 0,
-	IS_DEBUG         = false,
-	hl_enabled       = false,
+	walking_session      = {}, -- cache walking session to not recalculate while user rapidly invokes walking method
+	max_walk_places      = 5, -- how many places to walk back in one session
+	current_node         = 0,
+	IS_DEBUG             = false,
+	hl_enabled           = false,
 }
 
 
@@ -96,16 +62,21 @@ else
 	end))
 end
 
+function M.next_extmark_id()
+	M.extmark_id_increment = M.extmark_id_increment + 1
+	return M.extmark_id_increment
+end
+
 function M.update_extmark_score(id, line, score)
 	if id == nil then -- if mark doesn't exist, create new one
-		-- local next_id = M.extmarks_counter + 1 -- TODO: what the best way to generate id?
+		local next_id = M.next_extmark_id()
 		id = vim.api.nvim_buf_set_extmark(0, M.ns, line, -1, {
 			right_gravity = false, -- left gravity, stick to start of the node (on new line, and insert)
-			-- id = next_id,
+			id = next_id,
 		})
 		local file = vim.api.nvim_buf_get_name(0)
 		M.extmark_to_file[id] = file -- safve
-		print("new extmark", id, file, M.extmarks_counter + 1)
+		print("new extmark", id, file, next_id)
 		M.extmarks_counter = M.extmarks_counter + 1
 	end
 
@@ -124,7 +95,7 @@ function M.remove_extmark_score(id)
 end
 
 function M.score_current_scope()
-	local current = M.get_current_scope()
+	local current = utils.get_current_scope()
 	-- If working on "chunk" node, do nothing.
 	if current == nil then
 		return
@@ -202,20 +173,6 @@ function M.score_nodes(node, depth)
 	-- print(debug_str)
 end
 
----Get node where user is likely working. Return nil if cursor on "cuhnk" node
----@return TSNode | nil
-function M.get_current_scope()
-	local current = ts_utils.get_node_at_cursor()
-	if current == nil then
-		return nil
-	end
-	-- If working on "chunk" node return nil
-	if current:parent() == nil then
-		return nil
-	end
-	return current
-end
-
 ---@class WalkOpts
 ---@field ignore_file string? File to ignore when walking
 ---@type WalkOpts
@@ -246,7 +203,7 @@ function M.get_best_places(opts)
 			end
 		end
 	end
-	return topKTable(filtered_scores, length, M.max_walk_places)
+	return utils.topKTable(filtered_scores, length, M.max_walk_places)
 end
 
 function M.walk_to_another_file()
@@ -262,8 +219,8 @@ function M.walk_to_best_place(opts)
 		opts = default_walk_opts
 	end
 	-- get new walking session
-	-- TODO for now 'walking session' cashed  if less than 3 seconds passed betweeen calls
-	if os.time() - M.last_walk_time > 3 then
+	-- TODO for now 'walking session' cashed  if less than 2 seconds passed betweeen calls
+	if os.time() - M.last_walk_time > 2 then
 		M.walking_session = M.get_best_places(opts)
 		M.last_walk_index = 0
 	end
