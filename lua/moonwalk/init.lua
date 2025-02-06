@@ -18,6 +18,7 @@ local function topKTable(data, length, k)
 	if length < k then
 		k = length
 	end
+	print("topKTable", length, k)
 	local topKValues = {}
 	local topKKeys = {}
 
@@ -246,17 +247,46 @@ end
 -- TODO implement recency scoring here, make it reusable (jump per file, per project)
 -- Returns top k extmarks ids
 -- @return integer[]
-function M.get_best_places()
+function M.get_best_places(opts)
+	local ignore_file = opts.ignore_file
 	print("extmarks_counter", M.extmarks_counter)
-	return topKTable(M.scores, M.extmarks_counter, M.max_walk_places)
+
+	local filtered_scores = M.scores
+	local length = M.extmarks_counter
+	if ignore_file ~= nil then -- remove from scores all extmarks than are ignore_file
+		-- on huge amount of marks it could be redundant to copy all extmarks to new table
+		filtered_scores = {}
+		length = 0
+		for id, score in pairs(M.scores) do
+			if M.extmark_to_file[id] ~= ignore_file then
+				length = length + 1
+				filtered_scores[id] = score
+			end
+		end
+	end
+	return topKTable(filtered_scores, length, M.max_walk_places)
 end
 
+function M.walk_to_another_file()
+	local current_file = vim.api.nvim_buf_get_name(0)
+	local opts = { ignore_file = current_file }
+	M.walk_to_best_place(opts)
+end
+
+local default_walk_opts = {
+	ignore_file = nil,
+}
+
 --sorts scores and moves cursor to the first node
-function M.walk_to_best_place()
+---@param opts table
+function M.walk_to_best_place(opts)
+	if opts == nil then
+		opts = default_walk_opts
+	end
 	-- get new walking session
 	-- TODO for now 'walking session' cashed  if less than 3 seconds passed betweeen calls
 	if os.time() - M.last_walk_time > 3 then
-		M.walking_session = M.get_best_places()
+		M.walking_session = M.get_best_places(opts)
 		M.last_walk_index = 0
 	end
 
@@ -292,26 +322,29 @@ function M.walk_to_best_place()
 	M.last_walk_time = os.time()
 end
 
-function M.highlight_best_places_toggle()
-	if M.IS_DEBUG then
-		-- clear scores highlight_best_places_toggle
-		vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
-	end
-	M.IS_DEBUG = not M.IS_DEBUG
+function M.debug_view_toggle()
 	if M.hl_enabled then
 		vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
 		M.hl_enabled = false
+		M.IS_DEBUG = false
 		return
 	end
 	M.hl_enabled = true
+	M.IS_DEBUG = true
 	local keys = M.get_best_places() or {}
+	local current_file = vim.api.nvim_buf_get_name(0)
 	for _, id in ipairs(keys) do
-		local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
-		if mark == nil then
-			print("mark not found")
-			return
+		local file = M.extmark_to_file[id]
+		if file == current_file then
+			local mark = vim.api.nvim_buf_get_extmark_by_id(0, M.ns, id, {})
+			if mark == nil then
+				print("mark not found")
+				return
+			end
+			--print mark table
+			vim.print(mark)
+			vim.hl.range(0, M.ns_hl, "Visual", { mark[1], 0 }, { mark[1], -1 })
 		end
-		vim.hl.range(0, M.ns_hl, "Visual", { mark[1], 0 }, { mark[1], -1 })
 	end
 end
 

@@ -3,7 +3,7 @@
 
 //kvec.h start
 
-#define KV_INITIAL_VALUE  ({ .size = 0, .capacity = 0 })
+#define KV_INITIAL_VALUE { .size = 0, .capacity = 0, .items = NULL }
 
 #define kvec_t(type) \
   struct { \
@@ -30,13 +30,17 @@ typedef bool Boolean;
 typedef int64_t Integer;
 typedef double Float;
 typedef int LuaRef;
+typedef void* lua_State;
 typedef const char* String;
+typedef int Window;
+typedef int Buffer;
 
 typedef enum {
   kErrorTypeNone = -1,
   kErrorTypeException,
   kErrorTypeValidation,
 } ErrorType;
+
 typedef struct {
   ErrorType type;
   char *msg;
@@ -45,6 +49,14 @@ typedef struct {
 
 typedef struct key_value_pair KeyValuePair;
 typedef kvec_t(KeyValuePair) Dictionary;
+typedef kvec_t(KeyValuePair) Dict;
+#define Dict(name) KeyDict_##name;
+typedef struct {
+  Boolean err;
+  Boolean verbose;
+} DictEchoOpts;
+
+
 typedef enum {
   kObjectTypeNil = 0,
   kObjectTypeBoolean,
@@ -77,19 +89,48 @@ struct object {
   } data;
 };
 
+typedef struct {
+  char *cur_blk;
+  size_t pos, size;
+} Arena;
 
+/// Mask for all internal calls
+#define INTERNAL_CALL_MASK (((uint64_t)1) << (sizeof(uint64_t) * 8 - 1))
 
-typedef int Window;
+/// Internal call from VimL code
+#define VIML_INTERNAL_CALL INTERNAL_CALL_MASK
+
+/// Internal call from lua code
+#define LUA_INTERNAL_CALL (VIML_INTERNAL_CALL + 1)
+
 
 extern int name_to_color(const unsigned char *name, int *idx);
 
 extern Integer nvim_win_get_height(Window window, Error *err);
 
-extern ArrayOf(Integer, 2) nvim_win_get_cursor(Window window, Error *err);
+extern ArrayOf(Integer, 2) nvim_win_get_cursor(Window window, Arena *arena,  Error *err);
 extern void nvim_win_set_cursor(Window window, ArrayOf(Integer, 2) pos, Error *err);
 
+extern ArrayOf(String) nvim_buf_get_lines(
+	uint64_t channel_id,
+	Buffer buffer,
+	Integer start,
+	Integer end,
+	Boolean strict_indexing,
+	Arena *arena,
+	lua_State *lstate,
+	Error *err
+);
 
-// typedef void* lua_State;
 
 extern void **get_global_lstate(void);
+
+
+extern void arena_alloc_block(Arena *arena);
+
+
+// extern Object nvim_exec_lua(String code, Array args, Arena *arena, Error *err);
+extern void nvim_echo(Array chunks, Boolean history, DictEchoOpts *opts, Error *err);
+
+
 
