@@ -1,5 +1,4 @@
-const std = @import("std");
-const api = @import("./api.zig");
+const api = @import("./nvim_c_api.zig");
 
 pub const Arena = api.Arena;
 

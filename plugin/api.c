@@ -50,11 +50,22 @@ typedef struct {
 typedef struct key_value_pair KeyValuePair;
 typedef kvec_t(KeyValuePair) Dictionary;
 typedef kvec_t(KeyValuePair) Dict;
-#define Dict(name) KeyDict_##name;
+#define Dict(name) KeyDict_##name
+
 typedef struct {
   Boolean err;
   Boolean verbose;
-} DictEchoOpts;
+} Dict(echo_opts);
+
+
+typedef uint64_t OptionalKeys;
+
+typedef struct {
+  OptionalKeys is_set__get_extmark_;
+  Boolean details;
+  Boolean hl_name;
+} Dict(get_extmark);
+
 
 
 typedef enum {
@@ -76,17 +87,20 @@ typedef struct object Object;
 typedef kvec_t(Object) Array;
 #define ArrayOf(...) Array
 
+union Data {
+	Boolean boolean;
+	Integer integer;
+	Float floating;
+	String string;
+	Array array;
+	Dictionary dictionary;
+	LuaRef luaref;
+};
+
+
 struct object {
   ObjectType type;
-  union {
-    Boolean boolean;
-    Integer integer;
-    Float floating;
-    String string;
-    Array array;
-    Dictionary dictionary;
-    LuaRef luaref;
-  } data;
+	union Data data;
 };
 
 typedef struct {
@@ -104,12 +118,44 @@ typedef struct {
 #define LUA_INTERNAL_CALL (VIML_INTERNAL_CALL + 1)
 
 
+//Working with Zig
 extern int name_to_color(const unsigned char *name, int *idx);
-
 extern Integer nvim_win_get_height(Window window, Error *err);
-
 extern ArrayOf(Integer, 2) nvim_win_get_cursor(Window window, Arena *arena,  Error *err);
 extern void nvim_win_set_cursor(Window window, ArrayOf(Integer, 2) pos, Error *err);
+extern String nvim_buf_get_name(Buffer buffer, Error *err);
+extern ArrayOf(Integer) nvim_buf_get_extmark_by_id(Buffer buffer, Integer ns_id, Integer id, Dict(get_extmark) *opts, Arena *arena, Error *err);
+
+// in progress
+
+
+
+extern void nvim_echo(Array chunks, Boolean history, Dict(echo_opts) *opts, Error *err);
+
+extern Object nvim_notify(String msg, Integer log_level, Dict opts, Arena *arena, Error *err);
+extern void nvim_err_writeln(String str);
+
+
+
+typedef struct {
+  String text;
+  int hl_id;
+} HlMessageChunk;
+
+typedef kvec_t(HlMessageChunk) HlMessage;
+
+extern void msg_multihl(HlMessage hl_msg, const char *kind, bool history, bool err);
+extern void reset_last_sourcing(void);
+
+
+
+
+
+
+
+
+
+// testing
 
 extern ArrayOf(String) nvim_buf_get_lines(
 	uint64_t channel_id,
@@ -122,15 +168,9 @@ extern ArrayOf(String) nvim_buf_get_lines(
 	Error *err
 );
 
-
 extern void **get_global_lstate(void);
-
-
 extern void arena_alloc_block(Arena *arena);
-
-
 // extern Object nvim_exec_lua(String code, Array args, Arena *arena, Error *err);
-extern void nvim_echo(Array chunks, Boolean history, DictEchoOpts *opts, Error *err);
 
 
 

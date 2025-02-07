@@ -269,6 +269,7 @@ function M.debug_view_toggle()
 end
 
 function M.debug_show_scores()
+	local a = 3
 	-- Clear any existing virtual text first
 	vim.api.nvim_buf_clear_namespace(0, M.ns_hl, 0, -1)
 	-- get extmarks for current file

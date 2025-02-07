@@ -2,36 +2,8 @@
 //     @cInclude("./treesitter_api.h");
 // });
 
-const api = @import("./api.zig");
 const std = @import("std");
-const arena = @import("./arena.zig");
-
-// This function must be called exactly once during the lifetime of the plugin from lua side.
-pub export fn init_plugin() void {
-    arena.arena_init();
-}
-
-fn getEchoOpts(verobose: bool, err: bool) [*c]api.DictEchoOpts {
-    var opts = api.DictEchoOpts{ .verbose = verobose, .err = err };
-    return &opts;
-}
-
-fn getCString(str: []const u8) [*c]const u8 {
-    const c_string = std.mem.span(str);
-    return c_string;
-}
-
-fn getStringArray(str: []const u8) api.Array {
-    var array = api.Array{
-        .size = 1,
-        .capacity = 1,
-        .items = &api.Object{
-            .type = api.kObjectTypeString,
-            .data = .{ .string = getCString(str) },
-        },
-    };
-    return &array;
-}
+const api = @import("./nvim_lib.zig");
 
 pub export fn get_number() i64 {
 
@@ -42,28 +14,35 @@ pub export fn get_number() i64 {
     // const object_type = lines.items[0].data.type;
     // std.debug.print("object type: {d}\n", .{object_type});
 
-    var exec_err: api.Error = api.ERROR_INIT;
+    // var exec_err: api.Error = api.ERROR_INIT;
     // const ptr = arena.arena();
     // const c_string: [*c]const u8 = "vim.notify('hello')";
-    const arr = getStringArray("test");
-    const opts = getEchoOpts(true, true);
+    // const arr = getStringArray("test");
+    // const opts = getEchoOpts(true, true);
 
-    _ = api.nvim_echo(arr, false, opts, &exec_err);
+    // _ = api.nvim_echo(arr, false, opts, &exec_err);
     // _ = api.nvim_exec_lua(c_string, array, ptr, &exec_err);
 
-    // var err: api.Error = api.ERROR_INIT;
-    // //create pointer to arena.Arena
-    // // const arena_ptr: ?*api.Arena = null;
-    // const arena_ptr = arena.arena();
-    // // api.arena_alloc_block(arena_ptr);
-    // const cursor = api.nvim_win_get_cursor(0, arena_ptr, &err);
-    // const line_num = cursor.items[0].data.integer;
+    // api.arena_alloc_block(arena_ptr);
+    const cursor = api.nvim_win_get_cursor(0);
+    const line_num = cursor.row;
     // std.debug.print("line num: {d}\n", .{line_num});
-
-    return 3;
+    api.nvim_win_set_cursor(0, 2, 2);
+    return line_num;
 }
 
-pub export fn get_last_number(arr: [*]const u32, len: usize) u32 {
+pub export fn process_array(arr: [*]const u32, len: usize) u32 {
+    // Simple message without highlighting
+    // var chunks = [1][2][]const u8{.{ "ya\n", "WarningMsg\n" }};
+    // api.nvim_echo(&chunks, true, null);
+    // const str: []const u8 = "Hello world";
+    // api.nvim_err_writeln(str);
+    // api.nvim_err_writeln(str);
+
+    // const zig_str = std.mem.span(name);
+    // std.debug.print("extmark: {any}\n", .{extmark});
+    const file = api.nvim_buf_get_name(0);
+    api.nvim_out_write(file);
     if (len == 0) {
         return 0;
     }
