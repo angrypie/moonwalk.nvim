@@ -125,48 +125,27 @@ extern ArrayOf(Integer, 2) nvim_win_get_cursor(Window window, Arena *arena,  Err
 extern void nvim_win_set_cursor(Window window, ArrayOf(Integer, 2) pos, Error *err);
 extern String nvim_buf_get_name(Buffer buffer, Error *err);
 extern ArrayOf(Integer) nvim_buf_get_extmark_by_id(Buffer buffer, Integer ns_id, Integer id, Dict(get_extmark) *opts, Arena *arena, Error *err);
-
-// in progress
-
-
-
-extern void nvim_echo(Array chunks, Boolean history, Dict(echo_opts) *opts, Error *err);
-
-extern Object nvim_notify(String msg, Integer log_level, Dict opts, Arena *arena, Error *err);
 extern void nvim_err_writeln(String str);
 
-
-
-typedef struct {
-  String text;
-  int hl_id;
-} HlMessageChunk;
-
-typedef kvec_t(HlMessageChunk) HlMessage;
-
-extern void msg_multihl(HlMessage hl_msg, const char *kind, bool history, bool err);
-extern void reset_last_sourcing(void);
+//working on now
 
 
 
 
+
+
+
+//in process but still not working still
+
+extern void nvim_echo(Array chunks, Boolean history, Dict(echo_opts) *opts, Error *err);
+extern Object nvim_notify(String msg, Integer log_level, Dict opts, Arena *arena, Error *err);
 
 
 
 
 
 // testing
-
-extern ArrayOf(String) nvim_buf_get_lines(
-	uint64_t channel_id,
-	Buffer buffer,
-	Integer start,
-	Integer end,
-	Boolean strict_indexing,
-	Arena *arena,
-	lua_State *lstate,
-	Error *err
-);
+extern ArrayOf(String) nvim_buf_get_lines( uint64_t channel_id, Buffer buffer, Integer start, Integer end, Boolean strict_indexing, Arena *arena, lua_State *lstate, Error *err);
 
 extern void **get_global_lstate(void);
 extern void arena_alloc_block(Arena *arena);
