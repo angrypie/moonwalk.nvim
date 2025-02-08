@@ -42,16 +42,29 @@ pub export fn process_array(arr: [*]const u32, len: usize) u32 {
     // const zig_str = std.mem.span(name);
     // std.debug.print("extmark: {any}\n", .{extmark});
     // const file = api.nvim_buf_get_name(0);
-    // var array = api.nvim_buf_get_lines(0, 0, 1, false);
-    // for(0..array.size()) |_| {
-    //     const str = array.next();
-    //     if (str != null) {
-    //
-    //     }
+    // const cursor = api.nvim_win_get_cursor(0);
+    // const array = api.nvim_buf_get_lines(0, 0, 3, false);
+    // var iterator = array.iterator();
+    // while (iterator.next()) |line| {
+    //     std.debug.print("line: {s}\n", .{line});
+    // }
+    const array = api.nvim_buf_get_lines(0, 0, 3, false);
+    // var iterator = array.iterator();
+    // while (iterator.next()) |line| {
+    //     std.debug.print("line: {s}\n", .{line});
+    //     // api.nvim_out_write(line);
     // }
 
-    _ = api.nvim_buf_get_lines(0, 0, 5, false);
-    // api.nvim_out_write(file);
+    // std.debug.print("array len: {d}\n", .{array.len});
+
+    // var iterator = array.iterator();
+    // while (iterator.next()) |line| {
+    //     std.debug.print("line: {s}\n", .{line});
+    // }
+
+    for (0..array.len) |i| {
+        std.debug.print("line: {s}\n", .{array.get(i) orelse "null"});
+    }
     if (len == 0) {
         return 0;
     }

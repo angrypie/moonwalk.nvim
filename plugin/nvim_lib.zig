@@ -2,7 +2,6 @@ const c_api = @import("./nvim_c_api.zig");
 const arena = @import("./arena.zig");
 const std = @import("std");
 
-
 // IMPORTANT
 // This function must be called exactly once during the lifetime of the plugin from lua side.
 pub export fn init_plugin() void {
@@ -131,34 +130,23 @@ pub fn nvim_out_write(str: []const u8) void {
     c_api.nvim_err_writeln(str.ptr);
 }
 
-const StringArray = struct{
-    arr: *const c_api.Array,
-    index: usize = 0,
+pub const StringArray = struct {
+    arr: c_api.Array,
+    len: usize = 0,
 
-    pub fn init(arr: *const c_api.Array) StringArray {
-        return StringArray{ .arr = arr };
+    pub fn init(arr: c_api.Array) StringArray {
+        return StringArray{ .arr = arr, .len = arr.size };
     }
 
-    pub fn size(self: StringArray) usize {
-        return self.arr.size;
-    }
-
-    pub fn next(self: *StringArray) ?[]const u8 {
-        if (self.index >= self.arr.size) {
+    pub fn get(self: StringArray, index: usize) ?[]const u8 {
+        if (index >= self.len) {
             return null; // End of iteration
         }
-        std.debug.print("index: {d}\n", .{self.index});
-        const item = self.arr.items[2].data.string;
-        self.index += 1;
-        return std.mem.span(item);
-    }
-
-    pub fn toSlice(self: StringArray, allocator: *std.mem.Allocator) ![][]const u8 {
-        var result = try allocator.alloc([]const u8, self.arr.size);
-        for(0..self.arr.size) |i| {
-            result[i] = self.next();
+        const item = self.arr.items[index];
+        if (item.data.string == null) {
+            return "";
         }
-        return result;
+        return std.mem.span(item.data.string);
     }
 };
 
@@ -169,7 +157,7 @@ const NvimApiError = error{ GetLinesError, WrongResponseType };
 /// @param start Start line (0-based, inclusive)
 /// @param end End line (0-based, exclusive)
 /// @param strict_indexing Whether out-of-bounds should be an error
-pub fn nvim_buf_get_lines(buffer: i32, start: i64, end: i64, strict_indexing: bool) i32 {
+pub fn nvim_buf_get_lines(buffer: i32, start: i64, end: i64, strict_indexing: bool) StringArray {
     const arena_ptr = arena.arena();
 
     var err: c_api.Error = c_api.ERROR_INIT;
@@ -187,19 +175,7 @@ pub fn nvim_buf_get_lines(buffer: i32, start: i64, end: i64, strict_indexing: bo
     if (err.type != c_api.kErrorTypeNone) {
         std.debug.print("nvim_buf_get_lines error: type={s}\n", .{err.msg});
     }
-    var array = StringArray.init(&result);
-    _ = array.next();
-    _ = array.next();
-    _ = array.next();
-    // _ = array.next();
-    // std.debug.print("line: {s}\n", .{array.arr.items[4].data.string});
-    return 3;
-    // var i: usize = 0;
-    // while (array.next()) |_| {
-    //     i += 1;
-    // }
-    // return 3;
-    //
+    return StringArray.init(result);
 
     // return StringArray.init(&result);
 }
