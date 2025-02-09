@@ -1,5 +1,4 @@
 const api = @import("./nvim_c_api.zig");
-
 pub const Arena = api.Arena;
 
 threadlocal var ARENA: struct {

@@ -8,6 +8,8 @@ pub export fn init_plugin() void {
     arena.arena_init();
 }
 
+// pub fn init_cursor(comptime
+
 pub fn nvim_win_set_cursor(win: i32, row: i64, col: i64) void {
     var err: c_api.Error = c_api.ERROR_INIT;
 
@@ -21,12 +23,12 @@ pub fn nvim_win_set_cursor(win: i32, row: i64, col: i64) void {
             .data = .{ .integer = row },
         },
     };
-    const cursor2 = c_api.Array{
+    const cursor = c_api.Array{
         .size = 2,
         .capacity = 2,
-        .items = &cursorInts[0],
+        .items = &cursorInts,
     };
-    c_api.nvim_win_set_cursor(win, cursor2, &err);
+    c_api.nvim_win_set_cursor(win, cursor, &err);
     return;
 }
 
@@ -74,6 +76,8 @@ pub fn nvim_buf_get_extmark_by_id(buffer: i32, ns_id: i64, id: i64, opts: ?Extma
 }
 
 pub const EchoOpts = struct { verbose: bool };
+
+const ObjectArray = Array(c_api.Object);
 
 /// TODO: not working for now
 /// Prints a message given by a list of [text, hl_group] chunks.
@@ -130,25 +134,64 @@ pub fn nvim_out_write(str: []const u8) void {
     c_api.nvim_err_writeln(str.ptr);
 }
 
-pub const StringArray = struct {
-    arr: c_api.Array,
-    len: usize = 0,
+const String = []const u8;
+const Integer = i64;
 
-    pub fn init(arr: c_api.Array) StringArray {
-        return StringArray{ .arr = arr, .len = arr.size };
-    }
+pub fn Array(comptime T: type) type {
+    return struct {
+        arr: c_api.Array,
+        len: usize = 0,
+        const Self = @This();
+        pub fn init(arr: c_api.Array) Self {
+            return Self{ .arr = arr, .len = arr.size };
+        }
+        pub fn get(self: Self, index: usize) ?T {
+            if (index >= self.len) {
+                return null; // End of iteration
+            }
+            const item = self.arr.items[index];
+            return switch (T) {
+                []const u8 => {
+                    if (item.data.string == null) {
+                        return "";
+                    }
+                    return std.mem.span(item.data.string);
+                },
+                i64 => item.data.integer,
+                else => @compileError("Unsupported type"),
+            };
+        }
+        pub fn iterator(self: Self) Iterator(Self, T) {
+            return Iterator(Self, T).init(self);
+        }
+    };
+}
 
-    pub fn get(self: StringArray, index: usize) ?[]const u8 {
-        if (index >= self.len) {
-            return null; // End of iteration
+const StringArray = Array(String);
+
+// Define the Iterator type
+pub fn Iterator(comptime T: type, comptime Item: type) type {
+    return struct {
+        array: T,
+        index: usize = 0,
+
+        const Self = @This();
+
+        pub fn init(array: T) Self {
+            return Self{ .array = array };
         }
-        const item = self.arr.items[index];
-        if (item.data.string == null) {
-            return "";
+
+        pub fn next(self: *Self) ?Item {
+            if (self.index >= self.array.len) {
+                self.index = 0;
+                return null;
+            }
+            const value = self.array.get(self.index);
+            self.index += 1;
+            return value;
         }
-        return std.mem.span(item.data.string);
-    }
-};
+    };
+}
 
 const NvimApiError = error{ GetLinesError, WrongResponseType };
 
@@ -176,6 +219,4 @@ pub fn nvim_buf_get_lines(buffer: i32, start: i64, end: i64, strict_indexing: bo
         std.debug.print("nvim_buf_get_lines error: type={s}\n", .{err.msg});
     }
     return StringArray.init(result);
-
-    // return StringArray.init(&result);
 }
