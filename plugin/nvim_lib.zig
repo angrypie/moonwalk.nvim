@@ -1,6 +1,12 @@
 const c_api = @import("./nvim_c_api.zig");
 const arena = @import("./arena.zig");
 const std = @import("std");
+//TODO figure out errors
+//TODO: decide when and how to free memory from neovim. What use copy of data or Array wrapper?
+//TODO: functions we need to implement for now
+//nvim_buf_set_extmark
+//nvim_buf_del_extmark
+//nvim_buf_get_extmarks
 
 // IMPORTANT
 // This function must be called exactly once during the lifetime of the plugin from lua side.
@@ -55,7 +61,12 @@ const ExtmarkOpts = struct {
     hl_name: bool = false,
 };
 
-pub fn nvim_buf_get_extmark_by_id(buffer: i32, ns_id: i64, id: i64, opts: ?ExtmarkOpts) ?struct { row: i64, col: i64 } {
+const GetExmarkResult = struct {
+    row: i64,
+    col: i64,
+};
+
+pub fn nvim_buf_get_extmark_by_id(buffer: i32, ns_id: i64, id: i64, opts: ?ExtmarkOpts) ?GetExmarkResult {
     var err: c_api.Error = c_api.ERROR_INIT;
     const arena_ptr = arena.arena();
 
@@ -79,11 +90,9 @@ pub const EchoOpts = struct { verbose: bool };
 
 const ObjectArray = Array(c_api.Object);
 
-/// TODO: not working for now
-/// Prints a message given by a list of [text, hl_group] chunks.
-/// @param chunks List of [text, hl_group] pairs, where each is a text string highlighted by
-///               the (optional) name or ID hl_group.
-/// @param history if true, add to message-history.
+/// Echo text with optional highlighting
+/// @param chunks Array of [text, hl_group] pairs
+/// @param history Whether to add to message history
 /// @param opts Optional parameters:
 ///          - verbose: Message is controlled by the 'verbose' option.
 pub fn nvim_echo(chunks: *[1][2][]const u8, history: bool, opts: ?EchoOpts) void {
@@ -168,6 +177,7 @@ pub fn Array(comptime T: type) type {
 }
 
 const StringArray = Array(String);
+const IntegerArray = Array(i64);
 
 // Define the Iterator type
 pub fn Iterator(comptime T: type, comptime Item: type) type {
@@ -219,4 +229,43 @@ pub fn nvim_buf_get_lines(buffer: i32, start: i64, end: i64, strict_indexing: bo
         std.debug.print("nvim_buf_get_lines error: type={s}\n", .{err.msg});
     }
     return StringArray.init(result);
+}
+
+/// Creates a new namespace, or gets an existing one
+/// @param name Name of the namespace
+/// @return Namespace id
+pub fn nvim_create_namespace(name: []const u8) i64 {
+    var err: c_api.Error = c_api.ERROR_INIT;
+    const ns_id = c_api.nvim_create_namespace(name.ptr, &err);
+    if (err.type != c_api.kErrorTypeNone) {
+        std.debug.print("nvim_create_namespace error: type={}\n", .{err.type});
+    }
+    return ns_id;
+}
+
+/// Clear a namespace in a buffer
+/// @param buffer Buffer handle, or 0 for current buffer
+/// @param ns_id Namespace to clear, or -1 to clear all namespaces
+/// @param line_start Start of range of lines to clear (inclusive)
+/// @param line_end End of range of lines to clear (exclusive)
+pub fn nvim_buf_clear_namespace(buffer: i32, ns_id: i64, line_start: i64, line_end: i64) void {
+    var err: c_api.Error = c_api.ERROR_INIT;
+    c_api.nvim_buf_clear_namespace(buffer, ns_id, line_start, line_end, &err);
+    if (err.type != c_api.kErrorTypeNone) {
+        std.debug.print("nvim_buf_clear_namespace error: type={}\n", .{err.type});
+    }
+}
+
+/// Delete an extmark
+/// @param buffer Buffer handle, or 0 for current buffer
+/// @param ns_id Namespace id from nvim_create_namespace()
+/// @param id Extmark id
+/// @return true if the extmark was found and deleted
+pub fn nvim_buf_del_extmark(buffer: i32, ns_id: i64, id: i64) bool {
+    var err: c_api.Error = c_api.ERROR_INIT;
+    const result = c_api.nvim_buf_del_extmark(buffer, ns_id, id, &err);
+    if (err.type != c_api.kErrorTypeNone) {
+        std.debug.print("nvim_buf_del_extmark error: type={}\n", .{err.type});
+    }
+    return result;
 }
