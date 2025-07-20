@@ -4,31 +4,12 @@
 
 const std = @import("std");
 const api = @import("./nvim_lib.zig");
+const shadow = @import("./shadow.zig");
 
 pub export fn get_number() i64 {
-
-    // const lines = api.nvim_buf_get_lines(api.LUA_INTERNAL_CALL, 0, 0, 5, false, arena_ptr, null, &err);
-    // const lines = arena.getBufferLines(api.LUA_INTERNAL_CALL, 0, line_num - 1, line_num, false, null);
-    // const line_size = lines.size; //usize
-    //print first line
-    // const object_type = lines.items[0].data.type;
-    // std.debug.print("object type: {d}\n", .{object_type});
-
-    // var exec_err: api.Error = api.ERROR_INIT;
-    // const ptr = arena.arena();
-    // const c_string: [*c]const u8 = "vim.notify('hello')";
-    // const arr = getStringArray("test");
-    // const opts = getEchoOpts(true, true);
-
-    // _ = api.nvim_echo(arr, false, opts, &exec_err);
-    // _ = api.nvim_exec_lua(c_string, array, ptr, &exec_err);
-
-    // api.arena_alloc_block(arena_ptr);
-    const cursor = api.nvim_win_get_cursor(0);
-    const line_num = cursor.row;
-    // std.debug.print("line num: {d}\n", .{line_num});
-    api.nvim_win_set_cursor(0, 10, 10);
-    return line_num;
+    // Call the LLM suggestion function and return API execution time
+    const api_time_ms = shadow.make_suggestions();
+    return api_time_ms;
 }
 
 pub export fn process_array(arr: [*]const u32, len: usize) u32 {
@@ -42,29 +23,12 @@ pub export fn process_array(arr: [*]const u32, len: usize) u32 {
     // const zig_str = std.mem.span(name);
     // std.debug.print("extmark: {any}\n", .{extmark});
     // const file = api.nvim_buf_get_name(0);
-    // const cursor = api.nvim_win_get_cursor(0);
     // const array = api.nvim_buf_get_lines(0, 0, 3, false);
     // var iterator = array.iterator();
     // while (iterator.next()) |line| {
     //     std.debug.print("line: {s}\n", .{line});
     // }
-    var array = api.nvim_buf_get_lines(0, 0, 3, false);
-    var iterator = array.iterator();
-    while (iterator.next()) |line| {
-        std.debug.print("line: {s}\n", .{line});
-        // api.nvim_out_write(line);
-    }
-
-    // std.debug.print("array len: {d}\n", .{array.len});
-
-    // while (array.next()) |line| {
-    // std.debug.print("line: {s}\n", .{line});
-    // }
-
-    // for (0..array.len) |i| {
-    //     const line = array.get(i) orelse "<null line>";
-    //     std.debug.print("line: {s}\n", .{line});
-    // }
+    // This function can be used for testing other features
     if (len == 0) {
         return 0;
     }

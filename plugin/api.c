@@ -31,7 +31,10 @@ typedef int64_t Integer;
 typedef double Float;
 typedef int LuaRef;
 typedef void* lua_State;
-typedef const char* String;
+typedef struct {
+  char *data;
+  size_t size;
+} String;
 typedef int Window;
 typedef int Buffer;
 
@@ -127,15 +130,24 @@ extern String nvim_buf_get_name(Buffer buffer, Error *err);
 extern ArrayOf(Integer) nvim_buf_get_extmark_by_id(Buffer buffer, Integer ns_id, Integer id, Dict(get_extmark) *opts, Arena *arena, Error *err);
 extern void nvim_err_writeln(String str);
 
+//implemented, to testing
+extern Integer nvim_create_namespace(String name);
+extern void nvim_buf_clear_namespace(Buffer buffer, Integer ns_id, Integer line_start, Integer line_end, Error *err);
+
+
 //working on now
 
+extern Boolean nvim_buf_del_extmark(Buffer buffer, Integer ns_id, Integer id, Error *err);
+
+
+// extern Integer nvim_buf_set_extmark(Buffer buffer, Integer ns_id, Integer line, Integer col, Dict(set_extmark) *opts, Error *err);
+//
+// extern Array nvim_buf_get_extmarks(Buffer buffer, Integer ns_id, Object start, Object end, Dict(get_extmarks) *opts, Arena *arena, Error *err);
+//
 
 
 
-
-
-
-//in process but still not working still
+//in process but still not working
 
 extern void nvim_echo(Array chunks, Boolean history, Dict(echo_opts) *opts, Error *err);
 extern Object nvim_notify(String msg, Integer log_level, Dict opts, Arena *arena, Error *err);
@@ -146,6 +158,8 @@ extern Object nvim_notify(String msg, Integer log_level, Dict opts, Arena *arena
 
 // testing
 extern ArrayOf(String) nvim_buf_get_lines( uint64_t channel_id, Buffer buffer, Integer start, Integer end, Boolean strict_indexing, Arena *arena, lua_State *lstate, Error *err);
+extern void nvim_buf_set_lines(uint64_t channel_id, Buffer buffer, Integer start, Integer end, Boolean strict_indexing, ArrayOf(String) replacement, Arena *arena, Error *err);
+extern Integer nvim_buf_line_count(Buffer buffer, Error *err);
 
 extern void **get_global_lstate(void);
 extern void arena_alloc_block(Arena *arena);

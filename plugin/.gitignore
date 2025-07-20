@@ -1,1 +1,2 @@
-libmain*
+./libmain*
+./nvim_c_api.zig

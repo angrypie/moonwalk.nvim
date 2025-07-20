@@ -16,7 +16,7 @@ pub export fn init_plugin() void {
 
 // pub fn init_cursor(comptime
 
-pub fn nvim_win_set_cursor(win: i32, row: i64, col: i64) void {
+pub export fn nvim_win_set_cursor(win: i32, row: i64, col: i64) void {
     var err: c_api.Error = c_api.ERROR_INIT;
 
     var cursorInts: [2]c_api.Object = .{
@@ -38,22 +38,25 @@ pub fn nvim_win_set_cursor(win: i32, row: i64, col: i64) void {
     return;
 }
 
-pub fn nvim_win_get_cursor(win: i32) struct { col: i64, row: i64 } {
+// Gets the (1,0)-indexed, buffer-relative cursor position for a given window (different windows showing the same buffer have independent cursor positions).
+pub fn nvim_win_get_cursor(win: i32) struct { row: i64, col: i64 } {
     var err: c_api.Error = c_api.ERROR_INIT;
     const arena_ptr = arena.arena();
     const cursor = c_api.nvim_win_get_cursor(win, arena_ptr, &err);
 
     return .{
-        .col = cursor.items[0].data.integer,
-        .row = cursor.items[1].data.integer,
+        .row = cursor.items[0].data.integer,
+        .col = cursor.items[1].data.integer,
     };
 }
 
 pub fn nvim_buf_get_name(buffer: i32) []const u8 {
     var err: c_api.Error = c_api.ERROR_INIT;
-    const c_str = c_api.nvim_buf_get_name(buffer, &err);
-    //c_str is [*:0]const u8 is a pointer to a null terminated string
-    return std.mem.span(c_str);
+    const str = c_api.nvim_buf_get_name(buffer, &err);
+    if (str.data == null or str.size == 0) {
+        return "";
+    }
+    return str.data[0..str.size];
 }
 
 const ExtmarkOpts = struct {
@@ -100,11 +103,17 @@ pub fn nvim_echo(chunks: *[1][2][]const u8, history: bool, opts: ?EchoOpts) void
     var chunk_pair = [_]c_api.Object{
         .{ // text string
             .type = c_api.kObjectTypeString,
-            .data = .{ .string = chunks[0][0].ptr },
+            .data = .{ .string = c_api.String{
+                .data = @constCast(@ptrCast(chunks[0][0].ptr)),
+                .size = chunks[0][0].len,
+            } },
         },
         .{ // hl_group string
             .type = c_api.kObjectTypeString,
-            .data = .{ .string = chunks[0][1].ptr },
+            .data = .{ .string = c_api.String{
+                .data = @constCast(@ptrCast(chunks[0][1].ptr)),
+                .size = chunks[0][1].len,
+            } },
         },
     };
 
@@ -140,7 +149,11 @@ pub fn nvim_echo(chunks: *[1][2][]const u8, history: bool, opts: ?EchoOpts) void
 }
 
 pub fn nvim_out_write(str: []const u8) void {
-    c_api.nvim_err_writeln(str.ptr);
+    const string_data = c_api.String{
+        .data = @constCast(@ptrCast(str.ptr)),
+        .size = str.len,
+    };
+    c_api.nvim_err_writeln(string_data);
 }
 
 const String = []const u8;
@@ -161,10 +174,11 @@ pub fn Array(comptime T: type) type {
             const item = self.arr.items[index];
             return switch (T) {
                 []const u8 => {
-                    if (item.data.string == null) {
+                    const str = item.data.string;
+                    if (str.data == null or str.size == 0) {
                         return "";
                     }
-                    return std.mem.span(item.data.string);
+                    return str.data[0..str.size];
                 },
                 i64 => item.data.integer,
                 else => @compileError("Unsupported type"),
@@ -205,6 +219,18 @@ pub fn Iterator(comptime T: type, comptime Item: type) type {
 
 const NvimApiError = error{ GetLinesError, WrongResponseType };
 
+//imlement count lines
+/// Get the number of lines in a buffer
+/// @param buffer Buffer handle, or 0 for current buffer
+pub fn nvim_buf_line_count(buffer: i32) i64 {
+    var err: c_api.Error = c_api.ERROR_INIT;
+    const result = c_api.nvim_buf_line_count(buffer, &err);
+    if (err.type != c_api.kErrorTypeNone) {
+        std.debug.print("nvim_buf_line_count error: type={}\n", .{err.type});
+    }
+    return result;
+}
+
 /// Get a range of lines from a buffer
 /// @param buffer Buffer handle, or 0 for current buffer
 /// @param start Start line (0-based, inclusive)
@@ -231,12 +257,66 @@ pub fn nvim_buf_get_lines(buffer: i32, start: i64, end: i64, strict_indexing: bo
     return StringArray.init(result);
 }
 
+/// Set (replace) a range of lines in a buffer
+/// @param buffer Buffer handle, or 0 for current buffer
+/// @param start Start line (0-based, inclusive)
+/// @param end End line (0-based, exclusive)
+/// @param strict_indexing Whether out-of-bounds should be an error
+/// @param replacement Array of lines to use as replacement
+pub fn nvim_buf_set_lines(buffer: i32, start: i64, end: i64, strict_indexing: bool, replacement: []const []const u8) void {
+    var err: c_api.Error = c_api.ERROR_INIT;
+    const arena_ptr = arena.arena();
+    
+    // Convert Zig string slice to C API Array
+    const allocator = std.heap.page_allocator;
+    var objects = allocator.alloc(c_api.Object, replacement.len) catch return;
+    defer allocator.free(objects);
+    
+    for (replacement, 0..) |line, i| {
+        // Create a String struct for the API
+        const string_data = c_api.String{
+            .data = @constCast(@ptrCast(line.ptr)),
+            .size = line.len,
+        };
+        
+        objects[i] = c_api.Object{
+            .type = c_api.kObjectTypeString,
+            .data = .{ .string = string_data },
+        };
+    }
+    
+    const c_replacement = c_api.Array{
+        .items = objects.ptr,
+        .size = replacement.len,
+        .capacity = replacement.len,
+    };
+    
+    c_api.nvim_buf_set_lines(
+        c_api.LUA_INTERNAL_CALL,
+        buffer,
+        start,
+        end,
+        strict_indexing,
+        c_replacement,
+        arena_ptr,
+        &err,
+    );
+    
+    if (err.type != c_api.kErrorTypeNone) {
+        std.debug.print("nvim_buf_set_lines error: type={}\n", .{err.type});
+    }
+}
+
 /// Creates a new namespace, or gets an existing one
 /// @param name Name of the namespace
 /// @return Namespace id
 pub fn nvim_create_namespace(name: []const u8) i64 {
     var err: c_api.Error = c_api.ERROR_INIT;
-    const ns_id = c_api.nvim_create_namespace(name.ptr, &err);
+    const string_data = c_api.String{
+        .data = @constCast(@ptrCast(name.ptr)),
+        .size = name.len,
+    };
+    const ns_id = c_api.nvim_create_namespace(string_data, &err);
     if (err.type != c_api.kErrorTypeNone) {
         std.debug.print("nvim_create_namespace error: type={}\n", .{err.type});
     }
