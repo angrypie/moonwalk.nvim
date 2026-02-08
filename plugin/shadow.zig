@@ -4,8 +4,8 @@ const nvim = @import("./nvim_lib.zig");
 const std = @import("std");
 
 // Configuration constants
-const CONTEXT_LINES_BEFORE = 10; // Get more context for better understanding
-const CONTEXT_LINES_AFTER = 10;
+const CONTEXT_LINES_BEFORE = 100; // Get more context for better understanding
+const CONTEXT_LINES_AFTER = 100;
 
 // LLM Provider enum
 const LLMProvider = enum {
@@ -102,10 +102,8 @@ fn send_to_llm(prompt: []const u8, context: []const u8, provider: LLMProvider, a
     };
 
     // Serialize to JSON based on provider
-    var json_buffer = std.ArrayList(u8).init(arena_allocator);
-
-    switch (provider) {
-        .OpenAI => {
+    const json_payload = switch (provider) {
+        .OpenAI => blk: {
             const request_data = OpenAIRequest{
                 .model = "gpt-4o", // Use gpt-4o which supports predicted outputs
                 .messages = &messages,
@@ -116,9 +114,9 @@ fn send_to_llm(prompt: []const u8, context: []const u8, provider: LLMProvider, a
                     .content = context,
                 },
             };
-            try std.json.stringify(request_data, .{}, json_buffer.writer());
+            break :blk try std.json.Stringify.valueAlloc(arena_allocator, request_data, .{});
         },
-        .Mistral => {
+        .Mistral => blk: {
             const request_data = MistralRequest{
                 .model = "codestral-latest",
                 .messages = &messages,
@@ -129,9 +127,9 @@ fn send_to_llm(prompt: []const u8, context: []const u8, provider: LLMProvider, a
                     .content = context,
                 },
             };
-            try std.json.stringify(request_data, .{}, json_buffer.writer());
+            break :blk try std.json.Stringify.valueAlloc(arena_allocator, request_data, .{});
         },
-    }
+    };
 
     // Prepare headers
     const auth_header = try std.fmt.allocPrint(arena_allocator, "Bearer {s}", .{api_key});
@@ -141,14 +139,15 @@ fn send_to_llm(prompt: []const u8, context: []const u8, provider: LLMProvider, a
     };
 
     // Make the request
-    var response_body = std.ArrayList(u8).init(arena_allocator);
+    var response_body: std.Io.Writer.Allocating = .init(arena_allocator);
+    defer response_body.deinit();
 
     const response = client.fetch(.{
         .method = .POST,
         .location = .{ .url = api_url },
         .extra_headers = &headers,
-        .payload = json_buffer.items,
-        .response_storage = .{ .dynamic = &response_body },
+        .payload = json_payload,
+        .response_writer = &response_body.writer,
     }) catch {
         return error.HttpRequestFailed;
     };
@@ -161,7 +160,7 @@ fn send_to_llm(prompt: []const u8, context: []const u8, provider: LLMProvider, a
     const parsed_response = try std.json.parseFromSlice(
         OpenAIResponse,
         arena_allocator,
-        response_body.items,
+        response_body.written(),
         .{ .ignore_unknown_fields = true },
     );
 
@@ -196,8 +195,8 @@ pub export fn make_suggestions() i64 {
     const file_name = nvim.nvim_buf_get_name(0);
 
     // Build context for LLM
-    var context_lines = std.ArrayList(u8).init(allocator);
-    defer context_lines.deinit();
+    var context_lines = std.ArrayList(u8).empty;
+    defer context_lines.deinit(allocator);
 
     var line_iterator = lines.iterator();
     var current_line_idx: i64 = 0;
@@ -211,7 +210,7 @@ pub export fn make_suggestions() i64 {
             cursor_line_idx = current_line_idx;
         }
 
-        context_lines.writer().print("{d:>4} {s} {s}\n", .{
+        context_lines.writer(allocator).print("{d:>4} {s} {s}\n", .{
             line_num,
             if (is_current) ">>>" else "   ",
             line,
@@ -220,10 +219,10 @@ pub export fn make_suggestions() i64 {
         // Add cursor position indicator
         if (is_current) {
             const padding: usize = @intCast(8 + cursor.col); // 8 is prefix length
-            context_lines.writer().writeByteNTimes(' ', padding) catch continue;
-            context_lines.writer().writeByte('^') catch continue;
-            context_lines.writer().writeAll(" <- cursor here") catch continue;
-            context_lines.writer().writeByte('\n') catch continue;
+            context_lines.writer(allocator).writeByteNTimes(' ', padding) catch continue;
+            context_lines.writer(allocator).writeByte('^') catch continue;
+            context_lines.writer(allocator).writeAll(" <- cursor here") catch continue;
+            context_lines.writer(allocator).writeByte('\n') catch continue;
         }
 
         current_line_idx += 1;
@@ -234,7 +233,7 @@ pub export fn make_suggestions() i64 {
         // Check for LLM_PROVIDER env var first
         if (std.process.getEnvVarOwned(allocator, "LLM_PROVIDER")) |p| {
             defer allocator.free(p);
-            if (std.mem.eql(u8, p, "openai")) {
+            if (std.mem.eql(u8, p, "mistral")) {
                 break :blk LLMProvider.OpenAI;
             }
         } else |_| {}
@@ -267,8 +266,8 @@ pub export fn make_suggestions() i64 {
     const api_duration = api_end - api_start;
 
     // Parse the suggestion to extract just the code lines
-    var fixed_lines = std.ArrayList([]const u8).init(allocator);
-    defer fixed_lines.deinit();
+    var fixed_lines = std.ArrayList([]const u8).empty;
+    defer fixed_lines.deinit(allocator);
 
     // First, check if the response contains markdown code blocks
     const has_code_blocks = std.mem.indexOf(u8, suggestion, "```") != null;
@@ -319,7 +318,7 @@ pub export fn make_suggestions() i64 {
 
         // Copy and add the line
         const line_copy = allocator.dupe(u8, cleaned) catch continue;
-        fixed_lines.append(line_copy) catch {
+        fixed_lines.append(allocator, line_copy) catch {
             allocator.free(line_copy);
             continue;
         };

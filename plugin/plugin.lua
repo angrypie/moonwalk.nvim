@@ -44,16 +44,16 @@ function M.process_array(numbers)
 	return lib.process_array(arr, #numbers)
 end
 
-vim.keymap.set("n", "<c-s>", function()
+vim.keymap.set("n", "<c-m>", function()
 	local api_time_ms = lib.get_number()
 	if api_time_ms > 0 then
 		print(string.format("LLM suggestion completed in %d ms", api_time_ms))
 	end
 end, {})
 
-vim.keymap.set("n", "<c-m>", function()
-	local result = M.process_array({ 1, 2, 10 })
-	-- print(result)
-end, {})
+-- vim.keymap.set("n", "<c-m>", function()
+-- 	local result = M.process_array({ 1, 2, 10 })
+-- 	-- print(result)
+-- end, {})
 
 return M
