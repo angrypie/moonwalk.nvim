@@ -11,7 +11,7 @@ const SetupStatus = enum(i32) {
 
 const RuntimeConfig = struct {
     provider_override: ?helpers.Provider = null,
-    openai_model: []const u8 = "gpt-4o",
+    openai_model: []const u8 = "gpt-5.2",
     mistral_model: []const u8 = "codestral-latest",
     temperature: f32 = 0.2,
     max_tokens: u32 = 2000,
@@ -46,17 +46,11 @@ const RequestMessage = struct {
     content: []const u8,
 };
 
-const Prediction = struct {
-    type: []const u8,
-    content: []const u8,
-};
-
 const ChatCompletionRequest = struct {
     model: []const u8,
     messages: []const RequestMessage,
     temperature: f32,
     max_tokens: u32,
-    prediction: Prediction,
 };
 
 const ChatCompletionResponse = struct {
@@ -95,6 +89,42 @@ const SYSTEM_PROMPT =
 const TMP_PROMPT_PATH = "/tmp/moonwalk_prompt.txt";
 const TMP_RESPONSE_PATH = "/tmp/moonwalk_response.txt";
 
+const PATCH_SYSTEM_PROMPT =
+    "You are a code fixing assistant. Analyze the provided file and fix any syntax errors, " ++
+    "incomplete statements, missing brackets, or other issues using the apply_patch tool. " ++
+    "Make minimal, targeted fixes.";
+const TMP_PATCH_PROMPT_PATH = "/tmp/moonwalk_patch_prompt.txt";
+const TMP_PATCH_RESPONSE_PATH = "/tmp/moonwalk_patch_response.txt";
+const TMP_PATCH_DIFF_PATH = "/tmp/moonwalk_patch_diff.txt";
+
+const ToolDef = struct {
+    type: []const u8,
+};
+
+const ResponsesApiRequest = struct {
+    model: []const u8,
+    instructions: []const u8,
+    input: []const u8,
+    tools: []const ToolDef,
+    temperature: f32,
+};
+
+const PatchOperation = struct {
+    type: []const u8 = "",
+    path: []const u8 = "",
+    diff: []const u8 = "",
+};
+
+const ResponseOutputItem = struct {
+    type: []const u8 = "",
+    call_id: []const u8 = "",
+    operation: ?PatchOperation = null,
+};
+
+const ResponsesApiResponse = struct {
+    output: []const ResponseOutputItem = &.{},
+};
+
 var runtime_config = RuntimeConfig{};
 var setup_done = false;
 
@@ -118,6 +148,81 @@ pub export fn shadow_setup(config_json: [*:0]const u8) i32 {
     applyConfigUpdate(allocator, parsed.value) catch return @intFromEnum(SetupStatus.invalid_config);
     setup_done = true;
     return @intFromEnum(SetupStatus.ok);
+}
+
+pub export fn make_suggestions_patch() i64 {
+    const allocator = std.heap.page_allocator;
+
+    const total_lines = nvim.nvim_buf_line_count(0);
+    if (total_lines <= 0) {
+        nvim.nvim_out_write("moonwalk: buffer has no lines to process");
+        return -1;
+    }
+
+    const cursor = nvim.nvim_win_get_cursor(0);
+    const file_name = nvim.nvim_buf_get_name(0);
+
+    const buffer_content = getBufferSliceText(allocator, 0, total_lines) catch {
+        nvim.nvim_out_write("moonwalk: failed to collect buffer content");
+        return -1;
+    };
+    defer allocator.free(buffer_content);
+
+    const input = buildPatchInput(allocator, file_name, buffer_content, cursor.row, cursor.col) catch {
+        nvim.nvim_out_write("moonwalk: failed to build patch input");
+        return -1;
+    };
+    defer allocator.free(input);
+
+    const model_name = runtime_config.openai_model;
+    debugInfo("moonwalk debug: patch mode, model={s} file={s}", .{ model_name, file_name });
+    writeTmpDebugDump(TMP_PATCH_PROMPT_PATH, "patch_prompt", input, .{
+        .provider = .openai,
+        .model = model_name,
+    });
+
+    const api_start = std.time.milliTimestamp();
+
+    const raw_response = sendToResponsesApi(allocator, input) catch |err| {
+        debugError("patch-request", err);
+        reportPatchFailure(err);
+        return -1;
+    };
+    defer allocator.free(raw_response);
+
+    const llm_response_ms = std.time.milliTimestamp() - api_start;
+    writeTmpDebugDump(TMP_PATCH_RESPONSE_PATH, "patch_response", raw_response, .{
+        .provider = .openai,
+        .model = model_name,
+        .llm_response_ms = llm_response_ms,
+    });
+    debugInfo("moonwalk debug: patch response bytes={d} ms={d}", .{ raw_response.len, llm_response_ms });
+
+    const patched = applyPatchOperations(allocator, raw_response, buffer_content) catch |err| {
+        debugError("patch-apply", err);
+        reportPatchFailure(err);
+        return -1;
+    };
+    defer allocator.free(patched);
+
+    var replacement = helpers.parseReplacementLines(
+        allocator,
+        patched,
+        @intCast(total_lines),
+        runtime_config.max_output_multiplier,
+        runtime_config.max_output_lines_min,
+    ) catch |err| {
+        debugError("patch-validate", err);
+        reportFailure(err);
+        return -1;
+    };
+    defer replacement.deinit(allocator);
+
+    nvim.nvim_buf_set_lines(0, 0, total_lines, false, replacement.lines.items);
+    restoreCursorAfterApply(cursor.row - 1, cursor.col, 0, total_lines, replacement.lines.items.len);
+
+    const api_end = std.time.milliTimestamp();
+    return @intCast(api_end - api_start);
 }
 
 pub export fn make_suggestions() i64 {
@@ -397,7 +502,6 @@ fn sendToLlm(
     const messages = [_]RequestMessage{
         .{ .role = "system", .content = SYSTEM_PROMPT },
         .{ .role = "user", .content = prompt },
-        // Keep prediction content identical to the last chat message content.
         .{ .role = "user", .content = context },
     };
 
@@ -406,10 +510,6 @@ fn sendToLlm(
         .messages = &messages,
         .temperature = runtime_config.temperature,
         .max_tokens = runtime_config.max_tokens,
-        .prediction = .{
-            .type = "content",
-            .content = context,
-        },
     };
 
     const json_payload = try std.json.Stringify.valueAlloc(arena_allocator, request_payload, .{});
@@ -528,6 +628,170 @@ fn clampI64(value: i64, min_value: i64, max_value: i64) i64 {
         return max_value;
     }
     return value;
+}
+
+fn buildPatchInput(allocator: std.mem.Allocator, file_name: []const u8, content: []const u8, cursor_row: i64, cursor_col: i64) ![]u8 {
+    return std.fmt.allocPrint(
+        allocator,
+        \\The user has the following file:
+        \\<BEGIN_FILES>
+        \\===== {s}
+        \\{s}
+        \\<END_FILES>
+        \\
+        \\Cursor position: row {d} (1-based), col {d} (0-based)
+        \\
+        \\Fix any syntax errors, incomplete statements, missing brackets, or other issues in this file.
+        \\Make minimal, targeted fixes. Do not rewrite working code.
+    ,
+        .{ file_name, content, cursor_row, cursor_col },
+    );
+}
+
+fn sendToResponsesApi(allocator: std.mem.Allocator, input: []const u8) ![]const u8 {
+    var arena_state = std.heap.ArenaAllocator.init(allocator);
+    defer arena_state.deinit();
+    const arena_alloc = arena_state.allocator();
+
+    var client = std.http.Client{ .allocator = arena_alloc };
+    defer client.deinit();
+
+    const api_key = resolveApiKey(allocator, .openai) catch return error.ApiKeyNotSet;
+    defer api_key.deinit(allocator);
+
+    const tools = [_]ToolDef{.{ .type = "apply_patch" }};
+    const request_payload = ResponsesApiRequest{
+        .model = runtime_config.openai_model,
+        .instructions = PATCH_SYSTEM_PROMPT,
+        .input = input,
+        .tools = &tools,
+        .temperature = runtime_config.temperature,
+    };
+
+    const json_payload = try std.json.Stringify.valueAlloc(arena_alloc, request_payload, .{});
+    const auth_header = try std.fmt.allocPrint(arena_alloc, "Bearer {s}", .{api_key.bytes});
+
+    const headers = [_]std.http.Header{
+        .{ .name = "Content-Type", .value = "application/json" },
+        .{ .name = "Authorization", .value = auth_header },
+    };
+
+    var response_body: std.Io.Writer.Allocating = .init(arena_alloc);
+    defer response_body.deinit();
+
+    const llm_start_ms = std.time.milliTimestamp();
+    const response = client.fetch(.{
+        .method = .POST,
+        .location = .{ .url = "https://api.openai.com/v1/responses" },
+        .extra_headers = &headers,
+        .payload = json_payload,
+        .response_writer = &response_body.writer,
+    }) catch {
+        return error.HttpRequestFailed;
+    };
+    const llm_end_ms = std.time.milliTimestamp();
+
+    const status_code: u16 = @intFromEnum(response.status);
+    debugInfo(
+        "moonwalk debug: responses api status={d} llm_ms={d} payload_bytes={d}",
+        .{ status_code, llm_end_ms - llm_start_ms, json_payload.len },
+    );
+    if (status_code < 200 or status_code >= 300) {
+        if (runtime_config.debug) {
+            const details = std.fmt.allocPrint(
+                allocator,
+                "moonwalk debug: responses api status {d}, body: {s}",
+                .{ status_code, response_body.written() },
+            ) catch return error.ApiRequestFailed;
+            defer allocator.free(details);
+            nvim.nvim_out_write(details);
+        }
+        return error.ApiRequestFailed;
+    }
+
+    return allocator.dupe(u8, response_body.written());
+}
+
+fn applyPatchOperations(allocator: std.mem.Allocator, raw_response: []const u8, original_content: []const u8) ![]u8 {
+    var parsed = std.json.parseFromSlice(ResponsesApiResponse, allocator, raw_response, .{
+        .ignore_unknown_fields = true,
+    }) catch {
+        return error.InvalidOutput;
+    };
+    defer parsed.deinit();
+
+    var current_content = try allocator.dupe(u8, original_content);
+    errdefer allocator.free(current_content);
+    var applied_count: usize = 0;
+
+    for (parsed.value.output) |item| {
+        if (!std.mem.eql(u8, item.type, "apply_patch_call")) continue;
+
+        const operation = item.operation orelse continue;
+        const op_type = operation.type;
+
+        if (std.mem.eql(u8, op_type, "update_file")) {
+            if (operation.diff.len == 0) continue;
+            debugInfo("moonwalk debug: applying update_file diff, bytes={d}", .{operation.diff.len});
+            dumpDiffToFile(allocator, operation.diff, op_type, applied_count);
+            const patched = helpers.applyV4ADiff(allocator, current_content, operation.diff, false) catch |err| {
+                debugError("patch-diff", err);
+                continue;
+            };
+            allocator.free(current_content);
+            current_content = patched;
+            applied_count += 1;
+        } else if (std.mem.eql(u8, op_type, "create_file")) {
+            if (operation.diff.len == 0) continue;
+            debugInfo("moonwalk debug: applying create_file diff, bytes={d}", .{operation.diff.len});
+            dumpDiffToFile(allocator, operation.diff, op_type, applied_count);
+            const patched = helpers.applyV4ADiff(allocator, "", operation.diff, true) catch |err| {
+                debugError("patch-diff-create", err);
+                continue;
+            };
+            allocator.free(current_content);
+            current_content = patched;
+            applied_count += 1;
+        }
+        // delete_file doesn't apply to current buffer, skip
+    }
+
+    if (applied_count == 0) {
+        return error.NoSuggestion;
+    }
+
+    debugInfo("moonwalk debug: applied {d} patch operations", .{applied_count});
+    return current_content;
+}
+
+fn dumpDiffToFile(allocator: std.mem.Allocator, diff: []const u8, op_type: []const u8, index: usize) void {
+    const body = std.fmt.allocPrint(
+        allocator,
+        "timestamp_ms={d}\nop_type={s}\nindex={d}\ndiff_bytes={d}\n---diff---\n{s}\n",
+        .{ std.time.milliTimestamp(), op_type, index, diff.len, diff },
+    ) catch return;
+    defer allocator.free(body);
+
+    // First patch overwrites, subsequent ones append
+    const flags: std.fs.File.CreateFlags = if (index == 0) .{} else .{ .truncate = false };
+    const file = std.fs.createFileAbsolute(TMP_PATCH_DIFF_PATH, flags) catch return;
+    defer file.close();
+    if (index > 0) {
+        file.seekFromEnd(0) catch return;
+    }
+    file.writeAll(body) catch return;
+}
+
+fn reportPatchFailure(err: anyerror) void {
+    const message = switch (err) {
+        error.ApiKeyNotSet => "moonwalk: missing OpenAI API key for patch mode",
+        error.NoSuggestion => "moonwalk: no patch operations in response",
+        error.HttpRequestFailed, error.ApiRequestFailed => "moonwalk: request to OpenAI responses API failed",
+        error.InvalidDiff => "moonwalk: failed to apply V4A diff",
+        error.InvalidOutput => "moonwalk: invalid response format from API",
+        else => "moonwalk: patch suggestion failed",
+    };
+    nvim.nvim_out_write(message);
 }
 
 fn reportFailure(err: anyerror) void {

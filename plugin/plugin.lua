@@ -3,6 +3,7 @@ local ffi = require("ffi")
 ffi.cdef([[
 	void init_plugin();
 	int get_number();
+	int apply_patch();
 	int setup_shadow(const char *config_json);
 	int process_array(const uint32_t *arr, size_t len);
 ]])
@@ -58,10 +59,17 @@ function M.process_array(numbers)
 	return lib.process_array(arr, #numbers)
 end
 
-vim.keymap.set("n", "<c-m>", function()
+vim.keymap.set("n", "<c-x>", function()
 	local api_time_ms = lib.get_number()
 	if api_time_ms > 0 then
 		print(string.format("LLM suggestion completed in %d ms", api_time_ms))
+	end
+end, {})
+
+vim.keymap.set("n", "<c-m>", function()
+	local api_time_ms = lib.apply_patch()
+	if api_time_ms > 0 then
+		print(string.format("Apply patch completed in %d ms", api_time_ms))
 	end
 end, {})
 
