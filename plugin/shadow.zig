@@ -41,30 +41,6 @@ const ConfigUpdate = struct {
     mistral_api_key: ?[]const u8 = null,
 };
 
-const RequestMessage = struct {
-    role: []const u8,
-    content: []const u8,
-};
-
-const ChatCompletionRequest = struct {
-    model: []const u8,
-    messages: []const RequestMessage,
-    temperature: f32,
-    max_tokens: u32,
-};
-
-const ChatCompletionResponse = struct {
-    choices: []const Choice = &.{},
-};
-
-const Choice = struct {
-    message: ResponseMessage = .{},
-};
-
-const ResponseMessage = struct {
-    content: []const u8 = "",
-};
-
 const TmpDumpMeta = struct {
     provider: ?helpers.Provider = null,
     model: ?[]const u8 = null,
@@ -82,12 +58,6 @@ const ApiKey = struct {
         }
     }
 };
-
-const SYSTEM_PROMPT =
-    "You are a code fixing assistant. Return only raw code for the provided visible context. " ++
-    "Do not use markdown fences, prose, headers, or explanations.";
-const TMP_PROMPT_PATH = "/tmp/moonwalk_prompt.txt";
-const TMP_RESPONSE_PATH = "/tmp/moonwalk_response.txt";
 
 const PATCH_SYSTEM_PROMPT =
     "You are a code fixing assistant. Analyze the provided file and fix any syntax errors, " ++
@@ -225,107 +195,6 @@ pub export fn make_suggestions_patch() i64 {
     return @intCast(api_end - api_start);
 }
 
-pub export fn make_suggestions() i64 {
-    const allocator = std.heap.page_allocator;
-
-    const cursor = nvim.nvim_win_get_cursor(0);
-    const row_zero = cursor.row - 1;
-    const total_lines = nvim.nvim_buf_line_count(0);
-    if (total_lines <= 0) {
-        nvim.nvim_out_write("moonwalk: buffer has no lines to process");
-        return -1;
-    }
-
-    const start = if (runtime_config.context_before > row_zero) 0 else row_zero - runtime_config.context_before;
-    const desired_end = row_zero + runtime_config.context_after + 1;
-    const end = if (desired_end > total_lines) total_lines else desired_end;
-    debugInfo(
-        "moonwalk debug: make_suggestions range=[{d},{d}) cursor=({d},{d}) total_lines={d}",
-        .{ start, end, cursor.row, cursor.col, total_lines },
-    );
-
-    const context = getBufferSliceText(allocator, start, end) catch {
-        nvim.nvim_out_write("moonwalk: failed to collect buffer context");
-        return -1;
-    };
-    defer allocator.free(context);
-
-    const prompt = buildPrompt(allocator, nvim.nvim_buf_get_name(0), cursor.row, cursor.col) catch {
-        nvim.nvim_out_write("moonwalk: failed to build request prompt");
-        return -1;
-    };
-    defer allocator.free(prompt);
-    const provider = resolveProvider(allocator);
-    const model_name = providerModel(provider);
-    writeTmpDebugDump(
-        TMP_PROMPT_PATH,
-        "prompt",
-        prompt,
-        .{
-            .provider = provider,
-            .model = model_name,
-            .llm_response_ms = null,
-            .last_user_message_content = context,
-        },
-    );
-    debugInfo(
-        "moonwalk debug: prompt/context bytes prompt={d} context={d}",
-        .{ prompt.len, context.len },
-    );
-    debugInfo("moonwalk debug: provider={s} model={s}", .{ @tagName(provider), model_name });
-
-    const llm_call_start_ms = std.time.milliTimestamp();
-    const api_start = std.time.milliTimestamp();
-    const raw_output = sendToLlm(allocator, provider, prompt, context) catch |err| {
-        debugError("request", err);
-        reportFailure(err);
-        return -1;
-    };
-    const llm_response_ms = std.time.milliTimestamp() - llm_call_start_ms;
-    defer allocator.free(raw_output);
-    writeTmpDebugDump(
-        TMP_RESPONSE_PATH,
-        "raw_response",
-        raw_output,
-        .{
-            .provider = provider,
-            .model = model_name,
-            .llm_response_ms = llm_response_ms,
-        },
-    );
-    debugInfo("moonwalk debug: raw_output bytes={d}", .{raw_output.len});
-
-    const extracted_output = helpers.extractCodePayload(allocator, raw_output) catch |err| {
-        debugError("extract", err);
-        reportFailure(err);
-        return -1;
-    };
-    defer allocator.free(extracted_output);
-    debugInfo("moonwalk debug: extracted_output bytes={d}", .{extracted_output.len});
-
-    var replacement = helpers.parseReplacementLines(
-        allocator,
-        extracted_output,
-        @intCast(end - start),
-        runtime_config.max_output_multiplier,
-        runtime_config.max_output_lines_min,
-    ) catch |err| {
-        debugError("validate", err);
-        reportFailure(err);
-        return -1;
-    };
-    defer replacement.deinit(allocator);
-    debugInfo("moonwalk debug: replacement lines={d}", .{replacement.lines.items.len});
-
-    debugInfo("moonwalk debug: applying buffer lines range=[{d},{d})", .{ start, end });
-    nvim.nvim_buf_set_lines(0, start, end, false, replacement.lines.items);
-    debugInfo("moonwalk debug: restoring cursor after apply", .{});
-    restoreCursorAfterApply(cursor.row - 1, cursor.col, start, end, replacement.lines.items.len);
-
-    const api_end = std.time.milliTimestamp();
-    return @intCast(api_end - api_start);
-}
-
 fn applyConfigUpdate(allocator: std.mem.Allocator, update: ConfigUpdate) !void {
     if (update.provider) |provider_name| {
         runtime_config.provider_override = try helpers.parseProvider(provider_name);
@@ -408,17 +277,6 @@ fn dupeNonEmptyString(allocator: std.mem.Allocator, value: []const u8) ![]const 
     return allocator.dupe(u8, value);
 }
 
-fn resolveProvider(allocator: std.mem.Allocator) helpers.Provider {
-    if (runtime_config.provider_override) |provider| {
-        return provider;
-    }
-
-    const env_value = std.process.getEnvVarOwned(allocator, "LLM_PROVIDER") catch return .mistral;
-    defer allocator.free(env_value);
-
-    return helpers.parseProvider(env_value) catch .mistral;
-}
-
 fn resolveApiKey(allocator: std.mem.Allocator, provider: helpers.Provider) !ApiKey {
     switch (provider) {
         .openai => {
@@ -438,33 +296,6 @@ fn resolveApiKey(allocator: std.mem.Allocator, provider: helpers.Provider) !ApiK
     }
 }
 
-fn providerUrl(provider: helpers.Provider) []const u8 {
-    return switch (provider) {
-        .openai => "https://api.openai.com/v1/chat/completions",
-        .mistral => "https://api.mistral.ai/v1/chat/completions",
-    };
-}
-
-fn providerModel(provider: helpers.Provider) []const u8 {
-    return switch (provider) {
-        .openai => runtime_config.openai_model,
-        .mistral => runtime_config.mistral_model,
-    };
-}
-
-fn buildPrompt(allocator: std.mem.Allocator, file_name: []const u8, cursor_row_one: i64, cursor_col: i64) ![]u8 {
-    return std.fmt.allocPrint(
-        allocator,
-        \\File: {s}
-        \\Cursor row (1-based): {d}
-        \\Cursor col (0-based): {d}
-        \\Task: Fix syntax errors or incomplete code in the visible context.
-        \\Return only code for the full visible context.
-    ,
-        .{ file_name, cursor_row_one, cursor_col },
-    );
-}
-
 fn getBufferSliceText(allocator: std.mem.Allocator, start: i64, end: i64) ![]u8 {
     const lines = nvim.nvim_buf_get_lines(0, start, end, false);
     var builder = std.ArrayList(u8).empty;
@@ -481,96 +312,6 @@ fn getBufferSliceText(allocator: std.mem.Allocator, start: i64, end: i64) ![]u8 
     }
 
     return builder.toOwnedSlice(allocator);
-}
-
-fn sendToLlm(
-    allocator: std.mem.Allocator,
-    provider: helpers.Provider,
-    prompt: []const u8,
-    context: []const u8,
-) ![]const u8 {
-    var arena = std.heap.ArenaAllocator.init(allocator);
-    defer arena.deinit();
-    const arena_allocator = arena.allocator();
-
-    var client = std.http.Client{ .allocator = arena_allocator };
-    defer client.deinit();
-
-    const api_key = resolveApiKey(allocator, provider) catch return error.ApiKeyNotSet;
-    defer api_key.deinit(allocator);
-
-    const messages = [_]RequestMessage{
-        .{ .role = "system", .content = SYSTEM_PROMPT },
-        .{ .role = "user", .content = prompt },
-        .{ .role = "user", .content = context },
-    };
-
-    const request_payload = ChatCompletionRequest{
-        .model = providerModel(provider),
-        .messages = &messages,
-        .temperature = runtime_config.temperature,
-        .max_tokens = runtime_config.max_tokens,
-    };
-
-    const json_payload = try std.json.Stringify.valueAlloc(arena_allocator, request_payload, .{});
-    const auth_header = try std.fmt.allocPrint(arena_allocator, "Bearer {s}", .{api_key.bytes});
-
-    const headers = [_]std.http.Header{
-        .{ .name = "Content-Type", .value = "application/json" },
-        .{ .name = "Authorization", .value = auth_header },
-    };
-
-    var response_body: std.Io.Writer.Allocating = .init(arena_allocator);
-    defer response_body.deinit();
-
-    const llm_start_ms = std.time.milliTimestamp();
-    const response = client.fetch(.{
-        .method = .POST,
-        .location = .{ .url = providerUrl(provider) },
-        .extra_headers = &headers,
-        .payload = json_payload,
-        .response_writer = &response_body.writer,
-    }) catch {
-        return error.HttpRequestFailed;
-    };
-    const llm_end_ms = std.time.milliTimestamp();
-    const llm_duration_ms = llm_end_ms - llm_start_ms;
-
-    const status_code: u16 = @intFromEnum(response.status);
-    debugInfo(
-        "moonwalk debug: provider={s} model={s} http_status={d} llm_response_ms={d} timeout_ms={d} payload_bytes={d}",
-        .{ @tagName(provider), providerModel(provider), status_code, llm_duration_ms, runtime_config.timeout_ms, json_payload.len },
-    );
-    if (status_code < 200 or status_code >= 300) {
-        if (runtime_config.debug) {
-            const details = std.fmt.allocPrint(
-                allocator,
-                "moonwalk debug: provider status {d}, body: {s}",
-                .{ status_code, response_body.written() },
-            ) catch {
-                return error.ApiRequestFailed;
-            };
-            defer allocator.free(details);
-            nvim.nvim_out_write(details);
-        }
-        return error.ApiRequestFailed;
-    }
-
-    var parsed = try std.json.parseFromSlice(ChatCompletionResponse, arena_allocator, response_body.written(), .{
-        .ignore_unknown_fields = true,
-    });
-    defer parsed.deinit();
-
-    if (parsed.value.choices.len == 0) {
-        return error.NoSuggestion;
-    }
-
-    const suggestion = parsed.value.choices[0].message.content;
-    if (suggestion.len == 0) {
-        return error.NoSuggestion;
-    }
-
-    return allocator.dupe(u8, suggestion);
 }
 
 fn restoreCursorAfterApply(
