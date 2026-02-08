@@ -16,17 +16,18 @@ pub export fn init_plugin() void {
 
 // pub fn init_cursor(comptime
 
-pub export fn nvim_win_set_cursor(win: i32, row: i64, col: i64) void {
+pub fn nvim_win_set_cursor(win: i32, row: i64, col: i64) void {
     var err: c_api.Error = c_api.ERROR_INIT;
 
     var cursorInts: [2]c_api.Object = .{
         .{
             .type = c_api.kObjectTypeInteger,
-            .data = .{ .integer = col },
+            // Neovim expects [row, col].
+            .data = .{ .integer = row },
         },
         .{
             .type = c_api.kObjectTypeInteger,
-            .data = .{ .integer = row },
+            .data = .{ .integer = col },
         },
     };
     const cursor = c_api.Array{
@@ -104,14 +105,14 @@ pub fn nvim_echo(chunks: *[1][2][]const u8, history: bool, opts: ?EchoOpts) void
         .{ // text string
             .type = c_api.kObjectTypeString,
             .data = .{ .string = c_api.String{
-                .data = @constCast(@ptrCast(chunks[0][0].ptr)),
+                .data = @ptrCast(@constCast(chunks[0][0].ptr)),
                 .size = chunks[0][0].len,
             } },
         },
         .{ // hl_group string
             .type = c_api.kObjectTypeString,
             .data = .{ .string = c_api.String{
-                .data = @constCast(@ptrCast(chunks[0][1].ptr)),
+                .data = @ptrCast(@constCast(chunks[0][1].ptr)),
                 .size = chunks[0][1].len,
             } },
         },
@@ -150,7 +151,7 @@ pub fn nvim_echo(chunks: *[1][2][]const u8, history: bool, opts: ?EchoOpts) void
 
 pub fn nvim_out_write(str: []const u8) void {
     const string_data = c_api.String{
-        .data = @constCast(@ptrCast(str.ptr)),
+        .data = @ptrCast(@constCast(str.ptr)),
         .size = str.len,
     };
     c_api.nvim_err_writeln(string_data);
@@ -266,31 +267,31 @@ pub fn nvim_buf_get_lines(buffer: i32, start: i64, end: i64, strict_indexing: bo
 pub fn nvim_buf_set_lines(buffer: i32, start: i64, end: i64, strict_indexing: bool, replacement: []const []const u8) void {
     var err: c_api.Error = c_api.ERROR_INIT;
     const arena_ptr = arena.arena();
-    
+
     // Convert Zig string slice to C API Array
     const allocator = std.heap.page_allocator;
     var objects = allocator.alloc(c_api.Object, replacement.len) catch return;
     defer allocator.free(objects);
-    
+
     for (replacement, 0..) |line, i| {
         // Create a String struct for the API
         const string_data = c_api.String{
-            .data = @constCast(@ptrCast(line.ptr)),
+            .data = @ptrCast(@constCast(line.ptr)),
             .size = line.len,
         };
-        
+
         objects[i] = c_api.Object{
             .type = c_api.kObjectTypeString,
             .data = .{ .string = string_data },
         };
     }
-    
+
     const c_replacement = c_api.Array{
         .items = objects.ptr,
         .size = replacement.len,
         .capacity = replacement.len,
     };
-    
+
     c_api.nvim_buf_set_lines(
         c_api.LUA_INTERNAL_CALL,
         buffer,
@@ -301,7 +302,7 @@ pub fn nvim_buf_set_lines(buffer: i32, start: i64, end: i64, strict_indexing: bo
         arena_ptr,
         &err,
     );
-    
+
     if (err.type != c_api.kErrorTypeNone) {
         std.debug.print("nvim_buf_set_lines error: type={}\n", .{err.type});
     }
@@ -313,7 +314,7 @@ pub fn nvim_buf_set_lines(buffer: i32, start: i64, end: i64, strict_indexing: bo
 pub fn nvim_create_namespace(name: []const u8) i64 {
     var err: c_api.Error = c_api.ERROR_INIT;
     const string_data = c_api.String{
-        .data = @constCast(@ptrCast(name.ptr)),
+        .data = @ptrCast(@constCast(name.ptr)),
         .size = name.len,
     };
     const ns_id = c_api.nvim_create_namespace(string_data, &err);
